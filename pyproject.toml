@@ -1,0 +1,24 @@
+[project]
+name = "nl2sql-agent"
+version = "0.1.0"
+description = "中文自然语言转 SQL 的智能查询 Agent：Schema Linking + 自一致性投票 + 执行自愈 + AST 安全护栏 + 全链路 Trace"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "pydantic>=2.9",
+    "langgraph>=1.0",
+    "sqlglot>=25.0",
+    "openai>=1.40",
+    "fastapi>=0.110",
+    "uvicorn>=0.30",
+    "streamlit>=1.36",
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+# 说明：项目本身是可运行的目录式工程（python -m app.cli ...），
+# 这里只用于声明依赖与 pytest 配置，不强制打包发布。

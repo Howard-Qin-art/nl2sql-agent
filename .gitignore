@@ -1,0 +1,26 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.pytest_cache/
+pytest-cache-files-*/
+
+# ---- 虚拟环境 ----
+.venv/
+venv/
+
+# ---- 密钥：绝不提交 ----
+.env
+.env.*
+!.env.example
+
+# ---- 生成物（都能重新生成，不进仓库）----
+data/
+traces/
+eval/results/
+*.log
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store

@@ -1,0 +1,28 @@
+# NL2SQL Agent 运行依赖（Python >= 3.10）
+#
+# 本机验证环境：conda env `llm`（Python 3.10.21）
+#   langgraph 1.2.11 / openai 3.7.0 / sqlglot 30.22.0 / fastapi 0.143.0
+#   streamlit 1.x / pandas 2.3.3 / pytest 9.1.1
+#
+# 说明：Agent 编排用 langgraph；LLM 调用直接用 openai SDK（含 Ollama 原生 API 走 requests），
+#      刻意不引入 langchain 的链式封装——理由见 README「设计取舍」。
+
+# ---- 核心 ----
+requests>=2.31
+pydantic>=2.9
+langgraph>=1.0
+sqlglot>=25.0            # AST 安全护栏（只读白名单 / 强制 LIMIT）
+
+# ---- 云端后端（Ollama 本地推理不需要）----
+openai>=1.40
+
+# ---- 服务与前端 ----
+fastapi>=0.110
+uvicorn>=0.30
+streamlit>=1.36
+
+# ---- MCP（把查询能力暴露成标准工具，供 Claude Desktop / Cursor 等客户端调用）----
+mcp>=2.3
+
+# ---- 测试 ----
+pytest>=8.0
