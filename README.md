@@ -162,7 +162,7 @@ flowchart TD
 | **LangGraph StateGraph** | `GraphAgent`（`app/agent/graph.py`） | 生产：条件边 + Checkpointer 多轮记忆 + `interrupt()` 澄清 |
 | 顺序循环 | `NL2SQLAgent.run()` | CLI / 评测 / 单元测试：无框架依赖，秒级可测 |
 
-## 关键设计取舍（面试考点）
+## 关键设计取舍
 
 **1）为什么不直接用 LangChain 的 `SQLDatabaseChain`？**
 它把「取 schema → 生成 → 执行」封成一个黑盒，出错时无法插入自己的重试、投票、护栏，
