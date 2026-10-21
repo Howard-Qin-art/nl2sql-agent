@@ -268,7 +268,7 @@ nl2sql-agent/
 │   └── agent/{state,nodes,graph,core}.py  TypedDict+reducer / 节点 / StateGraph / 框架无关核心
 ├── mcp_server.py           MCP Server（stdio）：把查询能力暴露成 4 个标准工具
 ├── eval/{questions.jsonl, metrics.py, run_eval.py}   60 题题库 + 指标 + 评测执行器
-├── tests/                  72 个测试：护栏 / 指标 / 召回 / Agent 离线端到端 / API / MCP
+├── tests/                  85 个测试：护栏 / 指标 / 召回 / Agent 离线端到端 / API / MCP 工具与 Client
 ├── ui/streamlit_app.py     聊天式界面（SQL、结果表、投票明细、Trace 时间线）
 ├── scripts/                构建题库、分阶段验收、trace 校验
 ├── Dockerfile / docker-compose.yml   容器化（API + Ollama）
