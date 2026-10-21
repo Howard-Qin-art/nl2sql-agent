@@ -74,7 +74,7 @@ SQL    : SELECT STRFTIME('%Y-%m', o.order_date) AS ym, ROUND(SUM(o.total_amount)
 | 60 题 token / 估算成本 | 56 万（本地 0 元） | 56.3 万 ≈ **0.6 元** | 按占位价估算 |
 | 由错转对 / 由对转错 | — | **11 题 / 0 题** | **零回退** |
 
-> **两个口径都报，先讲清楚定义**（这也是面试里值得展开的一点）：
+> **两个口径都报，先讲清楚定义**（这本身也是值得展开的一点）：
 > - **严格口径**：结果集行序无关、**列数与列序都要一致**、数值带 1e-4 容差；
 > - **列数宽松口径**：行数一致 + 每行允许"多给/少给列"，只要公共列的值对得上。
 >
@@ -276,7 +276,7 @@ python -m eval.run_eval                 # 全量 60 题
 python -m pytest tests -q
 ```
 
-消融实验（简历里对比「有/无」某模块的效果）：
+消融实验（用于对比「有/无」某个模块的效果）：
 
 ```powershell
 $env:NL2SQL_N_CANDIDATES=1      ; python -m eval.run_eval --tag ablate-vote-off
