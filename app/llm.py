@@ -39,6 +39,9 @@ class LLMResult:
     backend: str = ""
     attempts: int = 1
     raw: dict[str, Any] = field(default_factory=dict)
+    # 工具调用（function calling）：统一成 [{"id","name","arguments"}]
+    # 不同后端格式不一样（Ollama 原生没有 id、OpenAI 协议 id 必填），在这里归一化
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -119,6 +122,7 @@ class BaseBackend:
         temperature: float | None = None,
         max_tokens: int | None = None,
         seed: int | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> LLMResult:
         raise NotImplementedError
 
@@ -141,6 +145,7 @@ class OllamaBackend(BaseBackend):
         max_tokens: int,
         seed: int | None,
         num_gpu: int,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         options: dict[str, Any] = {
             "temperature": temperature,
@@ -152,13 +157,15 @@ class OllamaBackend(BaseBackend):
             options["seed"] = seed
         payload: dict[str, Any] = {
             "model": self.s.model,
-            "messages": list(messages),
+            "messages": _normalize_messages_for_ollama(messages),
             "stream": False,
             "options": options,
             "keep_alive": self.s.ollama_keep_alive,
         }
         if json_mode:
             payload["format"] = "json"
+        if tools:
+            payload["tools"] = list(tools)
         return payload
 
     def chat(
@@ -169,6 +176,7 @@ class OllamaBackend(BaseBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
         seed: int | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> LLMResult:
         temperature = self.s.temperature if temperature is None else temperature
         max_tokens = self.s.max_tokens if max_tokens is None else max_tokens
@@ -176,7 +184,7 @@ class OllamaBackend(BaseBackend):
         last_err: Exception | None = None
 
         for attempt in range(1, self.s.max_retries + 2):
-            body = self._payload(messages, json_mode, temperature, max_tokens, seed, self.num_gpu)
+            body = self._payload(messages, json_mode, temperature, max_tokens, seed, self.num_gpu, tools)
             t0 = time.perf_counter()
             try:
                 resp = requests.post(url, json=body, timeout=self.s.request_timeout)
@@ -187,6 +195,15 @@ class OllamaBackend(BaseBackend):
                         self.num_gpu = 0
                         self._degraded = True
                         continue
+                    # 工具调用参数被模型写成残缺 JSON：Ollama 会返回 400 且报
+                    # "Value looks like object, but can't find closing '}' symbol"。
+                    # 这是小模型输出质量问题，重试一次通常就好了，不该直接放弃。
+                    if tools and _looks_like_tool_json_error(text):
+                        last_err = LLMError(f"模型输出的工具参数不是合法 JSON：{text[:200]}")
+                        if attempt <= self.s.max_retries:
+                            time.sleep(0.5)
+                            continue
+                        raise last_err
                     raise LLMError(f"Ollama HTTP {resp.status_code}: {text[:300]}")
                 data = resp.json()
                 content = (data.get("message") or {}).get("content", "")
@@ -199,6 +216,7 @@ class OllamaBackend(BaseBackend):
                     backend=self.name,
                     attempts=attempt,
                     raw=data,
+                    tool_calls=_normalize_tool_calls((data.get("message") or {}).get("tool_calls")),
                 )
             except Exception as exc:  # 网络/解析/HTTP 错误统一重试
                 last_err = exc
@@ -209,9 +227,51 @@ class OllamaBackend(BaseBackend):
         raise LLMError(f"Ollama 调用失败（已降级 num_gpu={self.num_gpu}）: {last_err}")
 
 
+def _normalize_messages_for_ollama(messages: Sequence[Message]) -> list[dict[str, Any]]:
+    """把 OpenAI 风格的历史消息转成 Ollama 原生能吃的格式。
+
+    关键差异（真实踩坑）：多轮工具调用时，历史里的 assistant 消息要带回 tool_calls。
+        OpenAI 协议：function.arguments 是 **JSON 字符串**
+        Ollama 原生：function.arguments 必须是 **对象**（Go 侧强类型 map）
+    发字符串给 Ollama 会 400：`Value looks like object, but can't find closing '}' symbol`。
+    所以在发出前只做这一层转换，上层（工具循环）保持协议中立。
+    """
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        item: dict[str, Any] = dict(msg)
+        calls = item.get("tool_calls")
+        if calls:
+            converted = []
+            for call in calls:
+                fn = dict(call.get("function") or {})
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try:
+                        fn["arguments"] = json.loads(args) if args.strip() else {}
+                    except json.JSONDecodeError:
+                        fn["arguments"] = {}
+                new_call = {k: v for k, v in call.items() if k != "function"}
+                new_call["function"] = fn
+                converted.append(new_call)
+            item["tool_calls"] = converted
+        # Ollama 的 tool 消息只认 role/content；tool_call_id 与 name 去掉更稳
+        if item.get("role") == "tool":
+            item = {"role": "tool", "content": item.get("content", "")}
+        out.append(item)
+    return out
+
+
 def _looks_like_gpu_failure(text: str) -> bool:
     lowered = text.lower()
     return any(k in lowered for k in ("cuda error", "device kernel image is invalid", "llama-server process has terminated"))
+
+
+def _looks_like_tool_json_error(text: str) -> bool:
+    """Ollama 解析模型生成的工具参数失败时的报错特征（可重试）。"""
+    lowered = text.lower()
+    return ("can't find closing" in lowered
+            or "value looks like object" in lowered
+            or ("tool" in lowered and "json" in lowered and "error" in lowered))
 
 
 class OpenAIBackend(BaseBackend):
@@ -246,6 +306,7 @@ class OpenAIBackend(BaseBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
         seed: int | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> LLMResult:
         temperature = self.s.temperature if temperature is None else temperature
         # 云端下限：百炼明确"不建议取 0"
@@ -261,6 +322,8 @@ class OpenAIBackend(BaseBackend):
             kwargs["response_format"] = {"type": "json_object"}
         if seed is not None:
             kwargs["seed"] = seed
+        if tools:
+            kwargs["tools"] = list(tools)
 
         last_err: Exception | None = None
         attempts = 0
@@ -270,14 +333,16 @@ class OpenAIBackend(BaseBackend):
             try:
                 resp = self.client.chat.completions.create(**kwargs)
                 usage = getattr(resp, "usage", None)
+                msg = resp.choices[0].message
                 return LLMResult(
-                    text=resp.choices[0].message.content or "",
+                    text=msg.content or "",
                     prompt_tokens=int(getattr(usage, "prompt_tokens", 0) or 0),
                     completion_tokens=int(getattr(usage, "completion_tokens", 0) or 0),
                     latency_ms=(time.perf_counter() - t0) * 1000,
                     model=self.s.openai_model,
                     backend=self.name,
                     attempts=attempts,
+                    tool_calls=_normalize_tool_calls(getattr(msg, "tool_calls", None)),
                 )
             except Exception as exc:
                 last_err = exc
@@ -294,11 +359,45 @@ class OpenAIBackend(BaseBackend):
                     kwargs.pop("seed", None)
                     attempts -= 1
                     continue
+                # 兼容回退 3：不支持 tools 就报清楚（不静默降级，否则工具调用会假成功）
+                if "tools" in kwargs and _looks_like_unsupported_param(text, "tools"):
+                    raise LLMError(f"该模型不支持工具调用（tools）：{text[:200]}")
                 if attempts <= self.s.max_retries:
                     time.sleep(min(2 ** (attempts - 1), 4))
                     continue
                 break
         raise LLMError(f"OpenAI 兼容后端调用失败：{_cloud_error_hint(str(last_err))}")
+
+
+def _normalize_tool_calls(raw: Any) -> list[dict[str, Any]]:
+    """把不同后端的工具调用归一化成 [{"id","name","arguments"}]。
+
+    - OpenAI 协议：tool_calls[i] = {id, type:"function", function:{name, arguments:"json字符串"}}
+    - Ollama 原生：tool_calls[i] = {function:{name, arguments:{dict}}}（通常没有 id）
+    统一补 id、把 arguments 解析成 dict，失败则给 {}（让工具层报参数错，而不是崩）。
+    """
+    calls: list[dict[str, Any]] = []
+    if not raw:
+        return calls
+    if isinstance(raw, dict):
+        raw = [raw]
+    for i, item in enumerate(raw):
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function") or item
+        name = fn.get("name") or item.get("name")
+        if not name:
+            continue
+        args = fn.get("arguments", item.get("arguments", {}))
+        if isinstance(args, str):
+            try:
+                args = json.loads(args) if args.strip() else {}
+            except json.JSONDecodeError:
+                args = {}
+        if not isinstance(args, dict):
+            args = {}
+        calls.append({"id": item.get("id") or f"call_{i}", "name": str(name), "arguments": args})
+    return calls
 
 
 def _looks_like_unsupported_param(error_text: str, param: str) -> bool:
@@ -331,10 +430,16 @@ class FakeBackend(BaseBackend):
     name = "fake"
 
     def __init__(self, settings: Settings, responder: Callable[[Sequence[Message]], str] | None = None,
-                 responses: Iterable[str] | None = None):
+                 responses: Iterable[str] | None = None,
+                 tool_script: Iterable[dict[str, Any]] | None = None):
         super().__init__(settings)
         self.responder = responder
         self.queue = list(responses or [])
+        # 工具调用脚本：每项是一轮模型响应，形如
+        #   {"tool_calls": [{"name": "get_schema", "arguments": {"tables": ["orders"]}}]}
+        #   {"text": "最终回答……"}
+        # 用于离线测「模型自主选工具」的循环，不需要真模型。
+        self.tool_script = list(tool_script or [])
         self.calls: list[list[Message]] = []
 
     def chat(
@@ -345,15 +450,25 @@ class FakeBackend(BaseBackend):
         temperature: float | None = None,
         max_tokens: int | None = None,
         seed: int | None = None,
+        tools: Sequence[dict[str, Any]] | None = None,
     ) -> LLMResult:
         self.calls.append(list(messages))
-        if self.responder is not None:
+        tool_calls: list[dict[str, Any]] = []
+        text = ""
+        if self.tool_script:
+            step = self.tool_script.pop(0)
+            if isinstance(step, str):
+                text = step
+            else:
+                text = step.get("text", "") or ""
+                tool_calls = _normalize_tool_calls(step.get("tool_calls"))
+        elif self.responder is not None:
             text = self.responder(messages)
         elif self.queue:
             text = self.queue.pop(0)
         else:
             raise LLMError("FakeBackend 没有可用的响应了")
-        prompt_tokens = sum(len(m.get("content", "")) for m in messages) // 4
+        prompt_tokens = sum(len(str(m.get("content", ""))) for m in messages) // 4
         return LLMResult(
             text=text,
             prompt_tokens=prompt_tokens,
@@ -361,6 +476,7 @@ class FakeBackend(BaseBackend):
             latency_ms=1.0,
             model="fake",
             backend=self.name,
+            tool_calls=tool_calls,
         )
 
 

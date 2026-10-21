@@ -31,17 +31,7 @@ SQL    : SELECT STRFTIME('%Y-%m', o.order_date) AS ym, ROUND(SUM(o.total_amount)
 
 ## 实测指标
 
-> 全部由 `python -m eval.run_eval` 在本机跑出。精选的原始逐题明细 + 指标摘要 + 报告三件套已入库，见 `eval/reports/`：
->
-> ```
-> eval/reports/
-> ├─ full60-local-qwen2.5-7b/              # 60 题完整评测（本地 qwen2.5:7b，CPU 推理）
-> ├─ full60-cloud-qwen-max/                # 同一套题库、同一套 Agent，换成百炼 qwen-max
-> └─ ablation-novote-local-qwen2.5-7b/     # 消融：关掉自一致性投票（N=1）
-> ```
->
-> 每个目录下是同样的三件套：`raw.jsonl`（逐题明细）+ `summary.json`（汇总指标）+ `report.md`（可读报告），
-> 可直接复算、可直接对照本页表格。运行时产生的全量产物仍输出到 `eval/results/`（不入仓库）。
+> 全部由 `python -m eval.run_eval` 在本机跑出，原始逐题 JSONL + summary + markdown 报告在 `eval/results/`。
 > 硬件：RTX 3060 Laptop（驱动 546.30 与当前 Ollama 的 CUDA 内核不兼容，评测走 **CPU 推理**，
 > qwen2.5:7b 约 14.6 tok/s），所以延迟是「纯 CPU 本地小模型」的水平，GPU 化后会显著下降。
 
@@ -74,7 +64,7 @@ SQL    : SELECT STRFTIME('%Y-%m', o.order_date) AS ym, ROUND(SUM(o.total_amount)
 | 60 题 token / 估算成本 | 56 万（本地 0 元） | 56.3 万 ≈ **0.6 元** | 按占位价估算 |
 | 由错转对 / 由对转错 | — | **11 题 / 0 题** | **零回退** |
 
-> **两个口径都报，先讲清楚定义**（这本身也是值得展开的一点）：
+> **两个口径都报，先讲清楚定义**（这也是面试里值得展开的一点）：
 > - **严格口径**：结果集行序无关、**列数与列序都要一致**、数值带 1e-4 容差；
 > - **列数宽松口径**：行数一致 + 每行允许"多给/少给列"，只要公共列的值对得上。
 >
@@ -172,7 +162,48 @@ flowchart TD
 | **LangGraph StateGraph** | `GraphAgent`（`app/agent/graph.py`） | 生产：条件边 + Checkpointer 多轮记忆 + `interrupt()` 澄清 |
 | 顺序循环 | `NL2SQLAgent.run()` | CLI / 评测 / 单元测试：无框架依赖，秒级可测 |
 
-## 关键设计取舍
+## 两种执行模式：固定流水线 vs 模型自主调工具
+
+项目里同时有两条路（这也是面试时最能聊的部分）：
+
+| | 流水线模式（默认） | 工具自主模式（tools / mcp） |
+|---|---|---|
+| 谁决定流程 | 开发者规定顺序（召回→生成→校验→执行→投票→自愈） | **模型自己决定**调哪个工具、调几次 |
+| 强项 | 稳定可控、评测分高（83.7%） | 灵活，能走没预设过的路径 |
+| 弱点 | 流程外的问题走不通 | 依赖模型能力，小模型容易乱调 |
+| 实现 | `app/agent/core.py` + `graph.py` | `app/agent/tool_loop.py` + `mcp_client.py` |
+
+```powershell
+python -m app.cli ask "一共有多少个客户？" --mode tools   # 模型自主调本地工具
+python -m app.cli ask "一共有多少个客户？" --mode mcp     # 模型自主调 MCP server 的工具
+```
+
+实测轨迹（本地 qwen2.5:7b、CPU，**3 步 20.9 秒**，全程模型自己决定）：
+
+```
+[tools] 本地工具：['list_tables', 'get_schema', 'run_sql']
+  ↳ 第1轮 get_schema({"tables": ["customer"]})                  # 先看表结构
+  ↳ 第2轮 run_sql({"sql": "SELECT COUNT(*) FROM customer"})     # 自己写 SQL
+结论   : 一共有200个客户。这个数字是直接从客户表中统计得到的客户ID数量。
+```
+
+MCP 模式（Agent 作为 MCP **Client**，工具是连上后**动态发现**的，不是写死的）：
+
+```
+[MCP] 从 server 动态发现工具：['list_tables', 'get_schema', 'run_sql', 'ask']
+  ↳ 第1轮 list_tables({})     # 模型自己选了最省事的工具（返回里就带行数）
+结论   : 数据库中一共有200个客户记录。
+```
+
+**这里踩到一个真实的多轮工具调用坑（面试可直接讲）**：多轮时历史要带回 `tool_calls`，
+OpenAI 协议要求 `arguments` 是 **JSON 字符串**，而 Ollama 原生 API 要求是 **对象**；
+发错格式 Ollama 直接 400：`Value looks like object, but can't find closing '}' symbol`。
+解决方式是在 Ollama 后端入口做消息归一化，上层工具循环保持协议中立。
+
+**边界**：工具自主模式是**另开的执行路径**，上面的 83.7% 是流水线模式的评测结果；
+工具模式还没跑那 60 题基准（本地 7B 的 tool calling 稳定性弱于云端，要跑基准建议用 qwen-max）。
+
+## 关键设计取舍（面试考点）
 
 **1）为什么不直接用 LangChain 的 `SQLDatabaseChain`？**
 它把「取 schema → 生成 → 执行」封成一个黑盒，出错时无法插入自己的重试、投票、护栏，
@@ -276,7 +307,7 @@ python -m eval.run_eval                 # 全量 60 题
 python -m pytest tests -q
 ```
 
-消融实验（用于对比「有/无」某个模块的效果）：
+消融实验（简历里对比「有/无」某模块的效果）：
 
 ```powershell
 $env:NL2SQL_N_CANDIDATES=1      ; python -m eval.run_eval --tag ablate-vote-off

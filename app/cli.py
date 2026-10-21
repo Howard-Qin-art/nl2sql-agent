@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 
 from app.agent.core import NL2SQLAgent
@@ -28,6 +29,49 @@ def _agent(engine: str):
     return GraphAgent(agent=agent) if engine == "graph" else agent
 
 
+def _cmd_ask_tools(args: argparse.Namespace) -> int:
+    """Plan B：让模型自己决定调哪个工具（tools=本地工具 / mcp=通过 MCP 协议连工具）。"""
+    from app.agent.tool_loop import local_tools, run_tool_agent
+
+    tracer = Tracer(enabled=SETTINGS.trace_enabled)
+    llm = LLMClient(settings=SETTINGS, tracer=tracer)
+    mode = args.mode
+
+    if mode == "mcp":
+        from pathlib import Path
+
+        from app.agent.mcp_client import mcp_tools
+
+        server = Path(__file__).resolve().parent.parent / "mcp_server.py"
+        with mcp_tools(command=sys.executable, args=[str(server)],
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"}) as tools:
+            print(f"[MCP] 从 server 动态发现工具：{[t.name for t in tools]}")
+            result = run_tool_agent(args.question, llm=llm, tools=tools,
+                                    max_steps=args.steps, tracer=tracer)
+    else:
+        tools = local_tools(SETTINGS)
+        print(f"[tools] 本地工具：{[t.name for t in tools]}")
+        result = run_tool_agent(args.question, llm=llm, tools=tools,
+                                max_steps=args.steps, tracer=tracer)
+
+    print("=" * 72)
+    print(f"问题   : {args.question}")
+    print(f"模式   : {mode}（模型自主选择工具，最大 {args.steps} 轮）")
+    for c in result.tool_calls:
+        args_preview = json.dumps(c.arguments, ensure_ascii=False)[:100]
+        print(f"  ↳ 第{c.step}轮 {c.name}({args_preview})  {c.latency_ms / 1000:.1f}s"
+              + ("" if c.ok else "  [工具报错]"))
+    print(f"结论   : {result.answer or '（无）'}")
+    if result.sql:
+        print(f"SQL    : {result.sql}")
+    if result.columns:
+        print(f"结果   : {result.row_count} 行  列={result.columns}")
+    print(f"步数   : {result.steps}    耗时 : {result.latency_ms / 1000:.1f}s")
+    if result.error:
+        print(f"错误   : {result.error}")
+    return 0 if result.ok else 1
+
+
 def _read_answer(prompt: str, default: str) -> str:
     """读用户输入；非交互环境（管道/重定向时 input 会抛 EOFError）必须兜住 ——
     否则一次「Agent 反问」会把 CLI 直接弄崩，这是实际踩到的坑。"""
@@ -39,6 +83,8 @@ def _read_answer(prompt: str, default: str) -> str:
 
 
 def cmd_ask(args: argparse.Namespace) -> int:
+    if getattr(args, "mode", "pipeline") in ("tools", "mcp"):
+        return _cmd_ask_tools(args)
     engine = _agent(args.engine)
     default_answer = args.answer or "按全部时间范围统计"
 
@@ -142,6 +188,9 @@ def main(argv: list[str] | None = None) -> int:
     p_ask = sub.add_parser("ask", help="问一个业务问题")
     p_ask.add_argument("question")
     p_ask.add_argument("--engine", choices=["core", "graph"], default="graph")
+    p_ask.add_argument("--mode", choices=["pipeline", "tools", "mcp"], default="pipeline",
+                       help="pipeline=固定流程(默认) | tools=模型自主调工具 | mcp=通过 MCP 协议连工具")
+    p_ask.add_argument("--steps", type=int, default=6, help="tools/mcp 模式的最大工具调用轮数")
     p_ask.add_argument("--clarify", action="store_true", help="core 引擎下开启交互式澄清")
     p_ask.add_argument("--answer", default=None, help="预置澄清答案（非交互环境用，避免等待输入）")
     p_ask.set_defaults(func=cmd_ask)
