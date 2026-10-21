@@ -14,10 +14,15 @@ venv/
 !.env.example
 
 # ---- 生成物（都能重新生成，不进仓库）----
+# 注：评测结果的精选件走 eval/reports/，是要入库的，不在这里忽略
 data/
 traces/
 eval/results/
 *.log
+
+# ---- 个人开发流水日志（含本地路径与过程痕迹，不公开）----
+# 对外展示的正式版本是 docs/ENGINEERING_LOG.md
+docs/PROGRESS.md
 
 # ---- 编辑器 / 系统 ----
 .idea/

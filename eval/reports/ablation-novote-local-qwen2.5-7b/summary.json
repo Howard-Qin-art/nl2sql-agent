@@ -1,0 +1,87 @@
+{
+  "n_questions": 60,
+  "n_gradable": 49,
+  "ex": 0.6122,
+  "ex_strict": 0.6122,
+  "ex_relaxed": 0.6122,
+  "em": 0.0,
+  "valid_sql_rate": 0.9833,
+  "clarify_accuracy": 1.0,
+  "guardrail_block_rate": 1.0,
+  "repair_rate": 0.0667,
+  "repair_success_rate": 0.25,
+  "latency_ms": {
+    "mean": 56239.5,
+    "p50": 48745.7,
+    "p95": 91715.8,
+    "max": 119332.4
+  },
+  "tokens": {
+    "prompt": 302640,
+    "completion": 12581
+  },
+  "llm_calls": 236,
+  "by_tag": {
+    "aggregate": {
+      "n": 12,
+      "ex": 0.8333,
+      "em": 0.0
+    },
+    "ambiguous": {
+      "n": 6,
+      "ex": null,
+      "em": null
+    },
+    "date": {
+      "n": 9,
+      "ex": 0.6667,
+      "em": 0.0
+    },
+    "edge": {
+      "n": 5,
+      "ex": 0.4,
+      "em": 0.0
+    },
+    "filter": {
+      "n": 1,
+      "ex": 1.0,
+      "em": 0.0
+    },
+    "having": {
+      "n": 1,
+      "ex": 0.0,
+      "em": 0.0
+    },
+    "hostile": {
+      "n": 5,
+      "ex": null,
+      "em": null
+    },
+    "join": {
+      "n": 15,
+      "ex": 0.4,
+      "em": 0.0
+    },
+    "simple": {
+      "n": 9,
+      "ex": 1.0,
+      "em": 0.0
+    },
+    "topn": {
+      "n": 4,
+      "ex": 0.0,
+      "em": 0.0
+    },
+    "window": {
+      "n": 7,
+      "ex": 0.1429,
+      "em": 0.0
+    }
+  },
+  "model": "qwen2.5:7b",
+  "candidates": 1,
+  "engine": "core",
+  "llm_rerank": true,
+  "data_integrity_ok": true,
+  "wall_clock_s": 3374.8
+}

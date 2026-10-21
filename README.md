@@ -31,7 +31,17 @@ SQL    : SELECT STRFTIME('%Y-%m', o.order_date) AS ym, ROUND(SUM(o.total_amount)
 
 ## 实测指标
 
-> 全部由 `python -m eval.run_eval` 在本机跑出，原始逐题 JSONL + summary + markdown 报告在 `eval/results/`。
+> 全部由 `python -m eval.run_eval` 在本机跑出。精选的原始逐题明细 + 指标摘要 + 报告三件套已入库，见 `eval/reports/`：
+>
+> ```
+> eval/reports/
+> ├─ full60-local-qwen2.5-7b/              # 60 题完整评测（本地 qwen2.5:7b，CPU 推理）
+> ├─ full60-cloud-qwen-max/                # 同一套题库、同一套 Agent，换成百炼 qwen-max
+> └─ ablation-novote-local-qwen2.5-7b/     # 消融：关掉自一致性投票（N=1）
+> ```
+>
+> 每个目录下是同样的三件套：`raw.jsonl`（逐题明细）+ `summary.json`（汇总指标）+ `report.md`（可读报告），
+> 可直接复算、可直接对照本页表格。运行时产生的全量产物仍输出到 `eval/results/`（不入仓库）。
 > 硬件：RTX 3060 Laptop（驱动 546.30 与当前 Ollama 的 CUDA 内核不兼容，评测走 **CPU 推理**，
 > qwen2.5:7b 约 14.6 tok/s），所以延迟是「纯 CPU 本地小模型」的水平，GPU 化后会显著下降。
 

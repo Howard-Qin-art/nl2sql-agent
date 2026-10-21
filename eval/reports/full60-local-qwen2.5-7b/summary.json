@@ -1,0 +1,86 @@
+{
+  "n_questions": 60,
+  "n_gradable": 49,
+  "ex": 0.6122,
+  "ex_strict": 0.6122,
+  "ex_loose": 0.8571,
+  "ex_relaxed": 0.6122,
+  "em": 0.0,
+  "valid_sql_rate": 0.9833,
+  "clarify_accuracy": 1.0,
+  "guardrail_block_rate": 1.0,
+  "repair_rate": 0.0333,
+  "repair_success_rate": 0.0,
+  "latency_ms": {
+    "mean": 96862.8,
+    "p50": 89954.9,
+    "p95": 150714.3,
+    "max": 175453.9
+  },
+  "tokens": {
+    "prompt": 534515,
+    "completion": 25489
+  },
+  "llm_calls": 353,
+  "by_tag": {
+    "aggregate": {
+      "n": 12,
+      "ex": 0.8333,
+      "em": 0.0
+    },
+    "ambiguous": {
+      "n": 6,
+      "ex": null,
+      "em": null
+    },
+    "date": {
+      "n": 9,
+      "ex": 0.6667,
+      "em": 0.0
+    },
+    "edge": {
+      "n": 5,
+      "ex": 0.4,
+      "em": 0.0
+    },
+    "filter": {
+      "n": 1,
+      "ex": 1.0,
+      "em": 0.0
+    },
+    "having": {
+      "n": 1,
+      "ex": 0.0,
+      "em": 0.0
+    },
+    "hostile": {
+      "n": 5,
+      "ex": null,
+      "em": null
+    },
+    "join": {
+      "n": 15,
+      "ex": 0.4,
+      "em": 0.0
+    },
+    "simple": {
+      "n": 9,
+      "ex": 1.0,
+      "em": 0.0
+    },
+    "topn": {
+      "n": 4,
+      "ex": 0.0,
+      "em": 0.0
+    },
+    "window": {
+      "n": 7,
+      "ex": 0.1429,
+      "em": 0.0
+    }
+  },
+  "source_file": "full2-qwen2.5_7b-n3-1014-0806.jsonl",
+  "regraded": true,
+  "regrade_changed_verdicts": 0,
+  "model": "qwen2.5:7b"
+}
