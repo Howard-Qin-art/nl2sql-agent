@@ -20,9 +20,10 @@ traces/
 eval/results/
 *.log
 
-# ---- 个人开发流水日志（含本地路径与过程痕迹，不公开）----
+# ---- 个人文档（含本地路径、过程痕迹与面试准备材料，不公开）----
 # 对外展示的正式版本是 docs/ENGINEERING_LOG.md
 docs/PROGRESS.md
+RESUME.md
 
 # ---- 编辑器 / 系统 ----
 .idea/
