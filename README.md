@@ -162,7 +162,7 @@ python -m app.cli ask "一共有多少个客户？" --mode mcp     # 模型自�
 }
 ```
 
-反过来也做了：`app/agent/mcp_client.py` 可以连上任意 MCP server，动态拿到它的工具清单，再交给模型调用。之所以要单独写这个，是因为 MCP 的 SDK 是异步的，而 Agent 是同步的——实现方式是在后台线程跑一个事件循环、长期持有一个会话，同步侧用 `run_coroutine_threadsafe` 把调用投递过去，这样一次连接能服务多轮调用，不用每次重启子进程。
+反过来也做了：`app/agent/mcp_client.py` 可以连上任意 MCP server，动态拿到它的工具清单，再交给模型调用。之所以要单独写这个，是因为 MCP 的 SDK 是异步的，而 Agent 是同步的——实现方式是在后台线程跑一个事件循环、长期持有一个会话，同步侧用 `run_coroutine_threadsafe` 把调用转发过去，这样一次连接能服务多轮调用，不用每次重启子进程。
 
 这几块有测试兜着：
 
