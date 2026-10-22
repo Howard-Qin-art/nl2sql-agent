@@ -164,7 +164,7 @@ flowchart TD
 
 ## 两种执行模式：固定流水线 vs 模型自主调工具
 
-项目里同时有两条路（这也是面试时最能聊的部分）：
+项目里同时有两条路：
 
 | | 流水线模式（默认） | 工具自主模式（tools / mcp） |
 |---|---|---|
@@ -195,7 +195,7 @@ MCP 模式（Agent 作为 MCP **Client**，工具是连上后**动态发现**的
 结论   : 数据库中一共有200个客户记录。
 ```
 
-**这里踩到一个真实的多轮工具调用坑（面试可直接讲）**：多轮时历史要带回 `tool_calls`，
+**这里踩到一个真实的多轮工具调用坑**：多轮时历史要带回 `tool_calls`，
 OpenAI 协议要求 `arguments` 是 **JSON 字符串**，而 Ollama 原生 API 要求是 **对象**；
 发错格式 Ollama 直接 400：`Value looks like object, but can't find closing '}' symbol`。
 解决方式是在 Ollama 后端入口做消息归一化，上层工具循环保持协议中立。
@@ -203,7 +203,7 @@ OpenAI 协议要求 `arguments` 是 **JSON 字符串**，而 Ollama 原生 API �
 **边界**：工具自主模式是**另开的执行路径**，上面的 83.7% 是流水线模式的评测结果；
 工具模式还没跑那 60 题基准（本地 7B 的 tool calling 稳定性弱于云端，要跑基准建议用 qwen-max）。
 
-## 关键设计取舍（面试考点）
+## 关键设计取舍
 
 **1）为什么不直接用 LangChain 的 `SQLDatabaseChain`？**
 它把「取 schema → 生成 → 执行」封成一个黑盒，出错时无法插入自己的重试、投票、护栏，
@@ -315,7 +315,7 @@ $env:NL2SQL_MAX_REPAIR_ROUNDS=0 ; python -m eval.run_eval --tag ablate-repair-of
 python -m eval.run_eval --no-rerank --tag ablate-rerank-off
 ```
 
-## 响应速度与「强制打断」（体验设计）
+## 响应速度与「强制打断」
 
 本地 CPU 推理下，一次问答要调 6 次模型（召回 1 + 歧义判断 1 + 3 条候选 + 结果解释 1），
 每次 30~60 秒 —— 用户看到的就是「转圈好几分钟」。所以做了三层：
@@ -335,7 +335,7 @@ python -m eval.run_eval --no-rerank --tag ablate-rerank-off
   而不是「随时掐断」；总预算目前作用于顺序引擎（界面 / SSE / 评测），
   LangGraph 引擎靠「快速通道 + 单次调用超时」兜住，逐节点预算检查是下一步。
 
-## MCP 接入（把查询能力暴露成标准工具）
+## MCP 接入
 
 `mcp_server.py` 用 **MCP（Model Context Protocol）** 把查询能力暴露成标准工具，任何支持 MCP 的客户端
 （Claude Desktop / Cursor / 自研 Agent）都能直接调用，不需要写适配代码。
@@ -416,7 +416,7 @@ pytest tests/test_mcp_tools.py -q            # 这些工具已纳入 pytest，CI
 - 评测集是本项目自建的 60 题（覆盖 join/window/date/歧义/注入/边界），
   和 Spider/BIRD 这类公开集不通用；想横向对比需另接数据集。
 
-## 环境踩坑（真实记录）
+## 环境踩坑
 
 1. **GPU 推理直接崩**：`CUDA error: device kernel image is invalid`，
    原因是显卡驱动 546.30 与 Ollama 0.40.3 的 CUDA 内核不匹配。
