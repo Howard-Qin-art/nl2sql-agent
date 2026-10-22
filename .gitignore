@@ -24,6 +24,7 @@ eval/results/
 # 对外展示的正式版本是 docs/ENGINEERING_LOG.md
 docs/PROGRESS.md
 RESUME.md
+INTERVIEW.md
 
 # ---- 编辑器 / 系统 ----
 .idea/
