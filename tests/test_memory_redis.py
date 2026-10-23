@@ -162,11 +162,17 @@ def test_factories_pick_backend():
                                     redis_url="redis://127.0.0.1:6379/0")
     assert type(make_session_store("x", settings=local)).__name__ == "SessionStore"
     assert type(make_long_term_memory(settings=local)).__name__ == "LongTermMemory"
-    # redis 分支会去建客户端；没装 redis 包时应当给出可执行的报错而不是 ImportError 堆栈
-    with pytest.raises((RuntimeError, Exception)) as exc:
-        make_session_store("x", settings=redis_cfg)
-    msg = str(exc.value)
-    assert "redis" in msg.lower()
+    # 没装 redis 客户端时应当给出可执行报错；装了就该真的换成 Redis 实现
+    try:
+        import redis  # noqa: F401
+    except ImportError:
+        with pytest.raises(RuntimeError) as exc:
+            make_session_store("x", settings=redis_cfg)
+        assert "redis" in str(exc.value).lower()
+    else:
+        # 连接是惰性的，构造时不会去连服务器
+        assert type(make_session_store("x", settings=redis_cfg)).__name__ == "RedisSessionStore"
+        assert type(make_long_term_memory(settings=redis_cfg)).__name__ == "RedisLongTermMemory"
 
 
 def test_memory_block_works_with_redis_stores(fake):
