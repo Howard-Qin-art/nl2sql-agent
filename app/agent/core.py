@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from app.candidates import Candidate, SQLPlan, CandidateSet, majority_vote, build_candidate
+from app.clarify_rules import clarify_rule
 from app.config import SETTINGS, Settings
 from app.db.executor import SQLExecutor
 from app.db.schema import TableDoc, introspect, schema_prompt
@@ -51,6 +52,14 @@ _FAST_PATH_REPLY = (
     "· 退款原因各占多少比例？"
 )
 
+# 命中危险意图时的回复：明确说"只读"，并给一个可用的示范问法
+_REFUSED_REPLY = (
+    "这个系统只做**只读查询**，不能删改或写入数据，所以这个请求我不会执行。\n\n"
+    "如果你想看数据，可以这样问：\n"
+    "· 已取消的订单有多少单？\n"
+    "· 各状态订单的数量分布是怎样的？"
+)
+
 
 def _is_chitchat(question: str) -> bool:
     text = (question or "").strip()
@@ -78,6 +87,7 @@ class AgentResult:
     repair_rounds: int = 0
     repaired: bool = False
     rejected: list[dict] = field(default_factory=list)
+    refused: bool = False          # 输入层就拒绝（危险意图），不进入澄清/生成
     needs_clarification: bool = False
     clarify_question: str = ""
     confidence: float = 0.0
@@ -132,9 +142,15 @@ class NL2SQLAgent:
                         "notes": ["寒暄/非数据问题，跳过整条链路（0 次模型调用）"],
                         "stats": {"fast_path": True}}
             hints = check_question(question)
-            notes = [f"输入检查命中：{h}" for h in hints]
+            if hints:
+                # 命中危险意图（删表 / 改数据 / 注入）就直接拒绝，别再去澄清或生成 SQL：
+                # 之前只记 notes 继续跑，结果"把订单表删掉"被当成歧义反问了一句，体验很怪。
+                sp.outputs["refused"] = hints
+                return {"answer": _REFUSED_REPLY, "early_exit": True, "refused": True,
+                        "notes": [f"输入命中危险意图：{h}" for h in hints],
+                        "stats": {"input_hints": len(hints)}}
             sp.outputs["hints"] = hints
-            return {"notes": notes, "stats": {"input_hints": len(hints)}}
+            return {"stats": {"input_hints": len(hints)}}
 
     def link_schema(self, state: dict) -> dict:
         question = state.get("question", "")
@@ -156,6 +172,17 @@ class NL2SQLAgent:
             return {"needs_clarification": False, "confidence": 1.0}
         question = state.get("question", "")
         with self.tracer.span("check_ambiguity", question=question[:200]) as sp:
+            # 先过规则白名单：没有量化标准的说法（"最近的销售情况""大客户"）直接反问，
+            # 不依赖模型判断 —— 实测这类问题模型会"能兜就兜"，漏问率很高。
+            forced = clarify_rule(question)
+            if forced:
+                sp.outputs["rule_hit"] = forced
+                return {
+                    "needs_clarification": True,
+                    "clarify_question": forced,
+                    "confidence": 0.9,
+                    "notes": [f"命中口径白名单，直接澄清：{forced[:60]}"],
+                }
             try:
                 data, _ = self.llm.chat_json(
                     build_clarify_messages(question, state.get("schema_text", "")),
@@ -367,8 +394,10 @@ class NL2SQLAgent:
 
         _merge(state, self.guard_input(state))
         yield {"stage": "guard_input", "ok": not state.get("error"),
+               "refused": bool(state.get("refused")),
                "notes": state.get("notes", [])[-1:]}
-        if state.get("error"):
+        # 危险意图在这里就结束：不选表、不澄清、不生成（也省掉全部模型调用）
+        if state.get("error") or state.get("refused") or state.get("early_exit"):
             yield {"stage": "done", "result": finish()}
             return
 
@@ -479,6 +508,7 @@ def _to_result(state: dict, tracer: Tracer, t0: float, prices: tuple[float, floa
         repair_rounds=state.get("repair_rounds", 0),
         repaired=any(h.get("ok") for h in (state.get("repair_history") or [])),
         rejected=state.get("rejected", []),
+        refused=bool(state.get("refused")),
         needs_clarification=bool(state.get("needs_clarification")),
         clarify_question=state.get("clarify_question", ""),
         confidence=float(state.get("confidence") or 0.0),

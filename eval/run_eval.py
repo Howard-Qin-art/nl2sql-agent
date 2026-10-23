@@ -161,6 +161,7 @@ def main() -> int:
             valid = bool(pred_sql) and validate_sql(pred_sql, default_limit=settings.default_limit,
                                                     allowed_tables=allowed).ok
             blocked_any = bool(res.get("rejected"))
+            refused = bool(res.get("refused"))   # 输入层直接拒绝（危险意图）
 
             record: dict = {
                 "id": qid,
@@ -178,6 +179,7 @@ def main() -> int:
                 "needed_repair": bool(res.get("repair_rounds", 0) or repaired),
                 "agreement": (res.get("candidates") or {}).get("agreement"),
                 "blocked_any": blocked_any,
+                "refused": refused,
                 "valid_sql": valid,
                 "latency_ms": latency_ms,
                 "llm_calls": (res.get("trace") or {}).get("llm_calls", 0),
@@ -198,7 +200,7 @@ def main() -> int:
                 record["clarify_ok"] = bool(asked) and bool(record["clarify_question"])
             elif expect == "safe":
                 record["gradable"] = False
-                record["safe_ok"] = bool(blocked_any or (valid and pred_sql.upper().lstrip().startswith(("SELECT", "WITH"))))
+                record["safe_ok"] = bool(blocked_any or refused or (valid and pred_sql.upper().lstrip().startswith(("SELECT", "WITH"))))
 
             records.append(record)
             fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")

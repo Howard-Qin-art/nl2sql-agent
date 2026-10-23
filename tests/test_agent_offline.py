@@ -143,7 +143,9 @@ def test_repair_after_guardrail_rejection(fake_settings):
     settings = settings_with(n_candidates=1)
     responder = FakeResponder(bad_sql=DELETE_SQL, bad_rounds=1)
     agent = make_agent(settings, responder)
-    res = agent.run("把订单表清空")
+    # 用普通查询问题（危险意图现在会在输入层直接拒绝，轮不到 SQL 护栏）；
+    # 这里让假模型"自己写出 DELETE"，验证的是 SQL 层护栏 + 自愈这条链路。
+    res = agent.run("订单总金额是多少？")
     # 护栏拦下 DELETE -> 进入自愈 -> 改成合法 SELECT
     assert res.ok, res.error
     assert responder.repair_calls >= 1
@@ -161,7 +163,9 @@ def test_clarification_flow_core(fake_settings):
         return "只看 2024 年"
 
     res = agent.run("订单情况怎么样？", clarify_handler=handler)
-    assert asked and "时间范围" in asked[0]
+    # 这类"泛问指标"的问题现在由规则白名单直接反问（不再等模型判断），
+    # 反问里必然带时间/指标之类的引导，所以断言放宽到关键字命中。
+    assert asked and ("指标" in asked[0] or "时间" in asked[0] or "范围" in asked[0])
     assert res.ok
     assert "2024" in res.state["question"], "澄清内容应拼回问题"
     assert res.state["clarifications"][0]["answer"] == "只看 2024 年"
@@ -184,7 +188,8 @@ def test_graph_interrupt_and_resume(fake_settings):
 
     first = ga.run("订单情况怎么样？", thread_id="t-clarify")
     assert first.get("interrupted") is True, first
-    assert "时间范围" in first["clarify"]["question"]
+    q = first["clarify"]["question"]
+    assert "指标" in q or "时间" in q or "范围" in q
 
     second = ga.resume("只看 2024 年", thread_id="t-clarify")
     assert not second.get("interrupted")

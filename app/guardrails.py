@@ -33,9 +33,15 @@ FORBIDDEN_FUNCTIONS = {"load_extension", "readfile", "writefile", "edit", "fts3_
 SYSTEM_TABLES = {"sqlite_master", "sqlite_schema", "sqlite_temp_master"}
 INJECTION_PATTERNS = [
     re.compile(r"ignore\s+(all\s+)?(previous|above)\s+instructions", re.I),
-    re.compile(r"(你现在是|假装你是|进入开发者模式)", re.I),
+    re.compile(r"(你现在是|假装你是|进入开发者模式|忽略(之前|上面|以上)|无视(之前|上面|以上))", re.I),
     re.compile(r"drop\s+table", re.I),
     re.compile(r"delete\s+from", re.I),
+    # ---- 中文写意图：之前只拦英文 SQL 模式，导致"把订单表删掉"这类说法漏过去 ----
+    # 只匹配"动词 + 数据对象"的组合，避免把「已取消的订单有多少」这类查询误判
+    re.compile(r"(删|清空|清除|截断|抹掉|干掉)\s*(掉|除)?\s*(表|库|数据|记录|订单|商品|客户|明细)"),
+    re.compile(r"把.{0,12}(删掉|删除|清空|改成|改一下|更新成|插入|写入|覆盖)"),
+    re.compile(r"(改成|改为|修改|更新为|置为)\s*(已完成|已取消|已支付|已退款|成功|无效)"),
+    re.compile(r"(插入|新增|写入|导入)\s*(一条|几条|一批|数据|记录)"),
 ]
 
 
@@ -183,7 +189,11 @@ def validate_sql(
 
 
 def check_question(question: str) -> list[str]:
-    """对用户自然语言输入做浅层检查（提示注入/危险意图），只提示不拦截。"""
+    """对用户自然语言输入做浅层检查（提示注入/危险意图），只提示不拦截。
+
+    注意只做"提示"：真正的安全靠 SQL 层的 AST 白名单 + 只读连接。
+    这里是尽早识别意图，好让上层给出"我只支持只读查询"的回复，而不是傻乎乎去澄清或生成 SQL。
+    """
     hits: list[str] = []
     for pattern in INJECTION_PATTERNS:
         if pattern.search(question):

@@ -54,6 +54,7 @@ class AgentState(TypedDict, total=False):
     explanation: str
     error: str | None
     early_exit: bool                                  # 快速通道/空输入等：图直接结束，不再往下跑
+    refused: bool                                     # 输入层拒绝（危险意图），不进入澄清/生成
 
     # ---------- 观测 ----------
     stats: Annotated[dict, _merge_dict]
@@ -77,6 +78,7 @@ def new_state(question: str, history: list[dict[str, str]] | None = None,
         repair_rounds=0,
         needs_clarification=False,
         clarified=False,
+        refused=False,
         confidence=1.0,
         error=None,
     )
