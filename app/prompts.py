@@ -27,6 +27,14 @@ STRICT = os.getenv("NL2SQL_STRICT", "1").strip().lower() not in {"0", "false", "
 STRICT_BULLETS = """
 - **只输出问题要的指标列**：问「有多少笔 / 多少个 / 哪几种」就只给一列 COUNT / DISTINCT 结果，
   不要顺手把金额、GMV、平均值等没问的指标也 SELECT 出来；
+- **不要带多余的实体主键**：分组维度列要留着（例如问「每个大类的商品」要保留 parent_id），
+  但不要再带 product_id、customer_id 这类实体主键，除非问题明确要 id。
+  反例：问「每个大类里销量最高的商品是哪个」，输出 parent_id, product_id, product_name 就多了一列；
+  正解是 parent_id, product_name, qty；
+- **聚合数值统一四舍五入**：金额、均值、合计一律 `ROUND(..., 2)`，百分比 `ROUND(..., 1)`。
+  不写 ROUND 会得到 12345.6700000001 这种浮点尾巴，人看着对、比对时却对不上；
+- **排名要有稳定的次级排序**：用 RANK() / ROW_NUMBER() 时，ORDER BY 里追加一个唯一键
+  （如 product_name），否则并列时每次挑中的行可能不同，同一个问题换个问法就会给出不同答案；
 - **能单表回答就不要 JOIN**：只有当指标或筛选条件确实依赖另一张表时才连接，且连接必须有明确条件；
 - 列数自检：输出列数应当等于「问题要求的指标数」（分组问题 = 维度数 + 指标数）。""" if STRICT else ""
 
