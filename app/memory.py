@@ -12,6 +12,11 @@
     实现：SQLite 一张表 + 关键词/字素重叠打分召回（不引向量库，数据量小）。
     recall 出来的条目拼进 Prompt 的【已知偏好】段。
 
+**存储可切换**：默认落本地（会话写 JSON 文件、偏好写 SQLite）；
+把 `NL2SQL_MEMORY_BACKEND=redis` 就换成 Redis —— 会话用 LIST + TTL（过期自动清），
+偏好用 HASH + 命中计数。Redis 的优势是多实例共享会话、能设过期、内存快；
+单机自用则本地更省事（不需要额外服务）。
+
 设计上刻意保持"可读可删"：记忆是给人看的文本，不是隐向量，用户能 list / forget。
 """
 from __future__ import annotations
@@ -186,9 +191,148 @@ class LongTermMemory:
         return picked
 
 
+# ---------------------------------------------------------------- Redis 实现
+def _redis_client(url: str | None = None):
+    """惰性导入 redis 客户端：没装就给出可执行的提示，而不是抛 ImportError 堆栈。"""
+    try:
+        import redis  # type: ignore
+    except ImportError as exc:  # pragma: no cover - 取决于环境
+        raise RuntimeError(
+            "用了 Redis 记忆后端，但当前环境没有 redis 客户端：先 `pip install redis`；"
+            "本机还需要一个 Redis 服务（例如 `docker run -d -p 6379:6379 redis:7-alpine`）"
+        ) from exc
+    return redis.Redis.from_url(url or "redis://127.0.0.1:6379/0", decode_responses=True)
+
+
+class RedisSessionStore:
+    """短期记忆放 Redis：LIST 存最近几轮，LTRIM 截断，EXPIRE 自动过期。"""
+
+    def __init__(self, session_id: str, *, client=None, url: str | None = None,
+                 max_turns: int = 4, ttl_s: int = 7 * 24 * 3600, prefix: str = "nl2sql:session"):
+        self.session_id = session_id or "default"
+        self.max_turns = max_turns
+        self.ttl_s = ttl_s
+        self.key = f"{prefix}:{self.session_id}"
+        self.client = client or _redis_client(url)
+
+    def _decode(self, raw: str) -> Turn:
+        data = json.loads(raw)
+        return Turn(question=data.get("question", ""), answer=data.get("answer", ""),
+                    sql=data.get("sql", ""), tables=data.get("tables") or [],
+                    ts=float(data.get("ts") or 0))
+
+    def turns(self) -> list[Turn]:
+        raw = self.client.lrange(self.key, -self.max_turns, -1) or []
+        return [self._decode(r) for r in raw]
+
+    def history(self) -> list[dict[str, str]]:
+        msgs: list[dict[str, str]] = []
+        for t in self.turns():
+            msgs.extend(t.as_messages())
+        return msgs
+
+    def append(self, question: str, answer: str = "", sql: str = "",
+               tables: Sequence[str] | None = None) -> None:
+        payload = json.dumps(Turn(question=question, answer=answer, sql=sql,
+                                  tables=list(tables or []), ts=time.time()).to_dict(),
+                             ensure_ascii=False)
+        pipe = self.client.pipeline()
+        pipe.rpush(self.key, payload)
+        pipe.ltrim(self.key, -self.max_turns, -1)    # 只留最近 N 轮
+        pipe.expire(self.key, self.ttl_s)            # 过期自动清，不用手工回收
+        pipe.execute()
+
+    def clear(self) -> None:
+        self.client.delete(self.key)
+
+
+class RedisLongTermMemory:
+    """长期记忆放 Redis：HASH 存事实，另一个 HASH 记命中次数。"""
+
+    def __init__(self, *, client=None, url: str | None = None, prefix: str = "nl2sql:memory"):
+        self.prefix = prefix
+        self.key = f"{prefix}:facts"
+        self.hits_key = f"{prefix}:hits"
+        self.client = client or _redis_client(url)
+
+    def remember(self, text: str, kind: str = "preference", source: str = "user") -> str:
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("记忆内容不能为空")
+        fid = uuid.uuid4().hex[:10]
+        payload = json.dumps({"kind": kind, "text": text, "source": source,
+                              "created_at": time.time()}, ensure_ascii=False)
+        self.client.hset(self.key, fid, payload)
+        return fid
+
+    def _all(self) -> list[dict[str, Any]]:
+        raw = self.client.hgetall(self.key) or {}
+        hits = self.client.hgetall(self.hits_key) or {}
+        rows = []
+        for fid, payload in raw.items():
+            data = json.loads(payload)
+            rows.append({"id": fid, "kind": data.get("kind", ""), "text": data.get("text", ""),
+                         "source": data.get("source", ""), "created_at": data.get("created_at", 0),
+                         "hits": int(hits.get(fid, 0))})
+        rows.sort(key=lambda r: -r["created_at"])
+        return rows
+
+    def list(self, limit: int = 20) -> list[dict[str, Any]]:
+        return self._all()[:limit]
+
+    def forget(self, fact_id: str) -> bool:
+        removed = self.client.hdel(self.key, fact_id)
+        self.client.hdel(self.hits_key, fact_id)
+        return bool(removed)
+
+    def recall(self, query: str, top_k: int = 3, min_score: float = 0.12) -> list[dict[str, Any]]:
+        q = set(_tokens(query))
+        if not q:
+            return []
+        scored = []
+        for row in self._all():
+            toks = set(_tokens(row["text"]))
+            if not toks:
+                continue
+            overlap = len(q & toks) / len(q)
+            if overlap >= min_score:
+                scored.append((overlap, row))
+        scored.sort(key=lambda x: (-x[0], -x[1]["created_at"]))
+        picked = [row for _, row in scored[:top_k]]
+        if picked:
+            pipe = self.client.pipeline()
+            for row in picked:
+                pipe.hincrby(self.hits_key, row["id"], 1)
+                row["hits"] = int(row.get("hits") or 0) + 1
+            pipe.execute()
+        return picked
+
+
+# ---------------------------------------------------------------- 工厂（按配置选后端）
+def make_session_store(session_id: str, *, settings: Any = None, root: Path | None = None,
+                       max_turns: int = 4):
+    """按 NL2SQL_MEMORY_BACKEND 选实现：local（JSON 文件）/ redis。"""
+    s = settings
+    backend = getattr(s, "memory_backend", "local") if s is not None else "local"
+    if backend == "redis":
+        return RedisSessionStore(session_id, url=getattr(s, "redis_url", None),
+                                 max_turns=max_turns,
+                                 ttl_s=int(getattr(s, "session_ttl_s", 7 * 24 * 3600)))
+    return SessionStore(session_id, root=root, max_turns=max_turns)
+
+
+def make_long_term_memory(*, settings: Any = None, db_path: Path | None = None):
+    """长期记忆同样按后端选：local（SQLite）/ redis。"""
+    s = settings
+    backend = getattr(s, "memory_backend", "local") if s is not None else "local"
+    if backend == "redis":
+        return RedisLongTermMemory(url=getattr(s, "redis_url", None))
+    return LongTermMemory(db_path)
+
+
 # ---------------------------------------------------------------- Prompt 注入
-def build_memory_block(question: str, *, long_term: LongTermMemory | None = None,
-                       session: SessionStore | None = None, top_k: int = 3) -> str:
+def build_memory_block(question: str, *, long_term: Any = None,
+                       session: Any = None, top_k: int = 3) -> str:
     """把「历史对话」和「已知偏好」拼成一段 Prompt 片段；都没有就返回空串。"""
     parts: list[str] = []
 

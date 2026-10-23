@@ -108,6 +108,12 @@ class Settings:
     max_rows: int = 500              # 执行器最多返回多少行
     default_limit: int = 100         # 护栏强制补的 LIMIT
 
+    # ---------- 记忆 ----------
+    # local = 会话写 data/sessions/*.json + 偏好写 data/memory.db；redis = 两边都走 Redis
+    memory_backend: str = "local"
+    redis_url: str = "redis://127.0.0.1:6379/0"
+    session_ttl_s: int = 7 * 24 * 3600        # Redis 下会话记忆的过期时间
+
     # ---------- Trace / 成本 ----------
     trace_dir: Path = field(default_factory=lambda: ROOT / "traces")
     trace_enabled: bool = True
@@ -150,6 +156,9 @@ class Settings:
         s.trace_dir = Path(_env_str("NL2SQL_TRACE_DIR", str(s.trace_dir)))
         s.trace_enabled = _env_bool("NL2SQL_TRACE", s.trace_enabled)
         s.trace_llm = _env_bool("NL2SQL_TRACE_LLM", s.trace_llm)
+        s.memory_backend = _env_str("NL2SQL_MEMORY_BACKEND", s.memory_backend).lower()
+        s.redis_url = _env_str("NL2SQL_REDIS_URL", s.redis_url)
+        s.session_ttl_s = _env_int("NL2SQL_SESSION_TTL", s.session_ttl_s)
         if s.llm_backend == "openai":
             s.price_per_1k_prompt = _env_float("NL2SQL_PRICE_PROMPT", 0.001)
             s.price_per_1k_completion = _env_float("NL2SQL_PRICE_COMPLETION", 0.002)

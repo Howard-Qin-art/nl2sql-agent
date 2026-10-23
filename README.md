@@ -168,6 +168,47 @@ python -m app.cli ask "华东这个月成交额多少？" --memory
 两个刻意的限制：短期只留最近 N 轮，防止上下文越来越长；长期只注入 top-3 且要过阈值，
 防止"我记了很多"变成"prompt 里塞一堆无关的话"。
 
+### 存哪儿：本地文件 / SQLite，还是 Redis
+
+默认是本地（会话写 `data/sessions/*.json`、偏好写 `data/memory.db`），不需要任何额外服务。
+换成 Redis 只要一个环境变量：
+
+```powershell
+# 1) 起一个 Redis（任选其一）
+docker run -d --name nl2sql-redis -p 6379:6379 redis:7-alpine
+#   或 Windows 上用 Memurai / Redis for Windows（端口 6379）
+
+# 2) 装客户端
+pip install redis
+
+# 3) 切后端
+$env:NL2SQL_MEMORY_BACKEND=redis
+$env:NL2SQL_REDIS_URL=redis://127.0.0.1:6379/0
+
+# 4) 验证（连通性 / 会话截断 / TTL / 召回 / 命中计数 / 清理，逐条打印）
+python scripts/check_redis_memory.py
+```
+
+点 `--memory-backend redis` 也能临时切，不用改环境变量：
+
+```powershell
+python -m app.cli ask "华东成交额多少？" --session s1 --memory --memory-backend redis
+python -m app.cli memory list --memory-backend redis
+```
+
+两种后端的取舍：
+
+| | 本地（默认） | Redis |
+|---|---|---|
+| 需要额外服务 | 不需要 | 要起 Redis |
+| 多实例共享会话 | 不行（各自读本地文件） | 可以 |
+| 过期清理 | 手工删文件 | `EXPIRE` 自动过期（默认 7 天） |
+| 键设计 | — | 会话 `nl2sql:session:<id>`（LIST + TTL）；偏好 `nl2sql:memory:facts`（HASH）+ `:hits` 计数 HASH |
+| 适合 | 单机自用、演示 | 多进程/多实例、需要 TTL 与共享 |
+
+Redis 实现同样遵守"可读可删"：`memory list` 看到的是文本，`memory forget --id xxx` 直接 `HDEL`。
+没有引入 RediSearch 之类的向量检索 —— 几十条偏好用不到，真要做语义召回再说。
+
 ## 可观测：逐节点 trace
 
 每个节点开一个 span，记录耗时、token、LLM 调用次数与错误，落成 JSONL：

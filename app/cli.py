@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import sys
@@ -20,7 +21,8 @@ from app.config import SETTINGS
 from app.db.schema import all_tables_prompt, introspect
 from app.db.seed import seed_database
 from app.llm import LLMClient
-from app.memory import LongTermMemory, SessionStore, build_memory_block
+from app.memory import (LongTermMemory, SessionStore, build_memory_block,  # noqa: E402
+                         make_long_term_memory, make_session_store)
 from app.tracing import Tracer
 
 
@@ -98,11 +100,11 @@ def cmd_ask(args: argparse.Namespace) -> int:
         return _cmd_ask_tools(args)
 
     # 记忆：session = 短期（会话内多轮），--memory = 长期（跨会话偏好）
-    session = SessionStore(args.session, max_turns=args.remember_turns) if getattr(args, "session", None) else None
-    long_term = LongTermMemory() if getattr(args, "memory", False) else None
+    # 后端由 --memory-backend / NL2SQL_MEMORY_BACKEND 决定：local（本地文件+SQLite）或 redis
+    backend, session, long_term = _build_memory(args)
     memory_text = build_memory_block(args.question, long_term=long_term) if long_term else ""
     if session is not None:
-        print(f"[记忆] 会话 {session.session_id}：已载入 {len(session.turns())} 轮历史")
+        print(f"[记忆] 后端 {backend}｜会话 {session.session_id}：已载入 {len(session.turns())} 轮历史")
     if long_term is not None:
         hits = long_term.recall(args.question)
         print(f"[记忆] 长期偏好命中 {len(hits)} 条" + (f"：{'；'.join(h['text'][:24] for h in hits)}" if hits else ""))
@@ -209,9 +211,34 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return eval_main()
 
 
+def _build_memory(args: argparse.Namespace):
+    """按后端建会话/长期记忆；Redis 不可用时给出可执行提示而不是堆栈。"""
+    backend = (getattr(args, "memory_backend", None) or SETTINGS.memory_backend or "local").lower()
+    if backend not in ("local", "redis"):
+        print(f"[记忆] 未知后端 {backend}，回退 local")
+        backend = "local"
+    msettings = dataclasses.replace(SETTINGS, memory_backend=backend)
+    try:
+        session = (make_session_store(args.session, settings=msettings, max_turns=args.remember_turns)
+                   if getattr(args, "session", None) else None)
+        long_term = make_long_term_memory(settings=msettings) if getattr(args, "memory", False) else None
+        return backend, session, long_term
+    except RuntimeError as exc:
+        print(f"[记忆] {exc}")
+        print("[记忆] 已跳过记忆功能（不影响查询本身）")
+        return backend, None, None
+
+
 def cmd_memory(args: argparse.Namespace) -> int:
-    """长期记忆的增删查：`memory list / add / forget / recall`。"""
-    mem = LongTermMemory()
+    """长期记忆的增删查：`memory list / add / forget / recall`。后端同 ask。"""
+    backend = (getattr(args, "memory_backend", None) or SETTINGS.memory_backend or "local").lower()
+    try:
+        mem = make_long_term_memory(settings=dataclasses.replace(SETTINGS, memory_backend=backend))
+    except RuntimeError as exc:
+        print(f"{exc}")
+        return 2
+    if backend == "redis":
+        print(f"[记忆] 后端 redis：{SETTINGS.redis_url}")
     if args.action == "list":
         rows = mem.list()
         if not rows:
@@ -262,6 +289,8 @@ def main(argv: list[str] | None = None) -> int:
     p_ask.add_argument("--remember-turns", type=int, default=4, help="会话记忆保留最近几轮（默认 4）")
     p_ask.add_argument("--memory", action="store_true",
                        help="启用长期记忆：把匹配到的偏好/口径一起注入 Prompt")
+    p_ask.add_argument("--memory-backend", choices=["local", "redis"], default=None,
+                       help="记忆存储后端（默认取 NL2SQL_MEMORY_BACKEND，默认 local）")
     p_ask.set_defaults(func=cmd_ask)
 
     p_mem = sub.add_parser("memory", help="管理长期记忆（偏好与口径）")
@@ -269,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
     p_mem.add_argument("text", nargs="?", default="", help="add/recall 时的内容或查询")
     p_mem.add_argument("--kind", default="preference", help="记忆类型：preference / metric / entity")
     p_mem.add_argument("--id", default="", help="forget 时的记忆 id")
+    p_mem.add_argument("--memory-backend", choices=["local", "redis"], default=None,
+                       help="记忆存储后端（默认取 NL2SQL_MEMORY_BACKEND）")
     p_mem.set_defaults(func=cmd_memory)
 
     p_seed = sub.add_parser("seed", help="生成/重建示例库")
