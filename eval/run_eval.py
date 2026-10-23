@@ -99,7 +99,11 @@ def main() -> int:
           f"候选 {settings.n_candidates} | "
           f"引擎 {args.engine} | 重排 {'关' if args.no_rerank else '开'} | 结果 -> {jsonl_path.name}")
     if settings.llm_backend == "ollama":
-        print("提示：本机 GPU 与 Ollama CUDA 内核不兼容，走 CPU 推理，单题约 1~3 分钟。")
+        num_gpu = getattr(settings, "ollama_num_gpu", 0)
+        if num_gpu == 0:
+            print("提示：NL2SQL_OLLAMA_NUM_GPU=0，走 CPU 推理，单题约 1~3 分钟。")
+        else:
+            print(f"提示：NL2SQL_OLLAMA_NUM_GPU={num_gpu}（上 GPU，6GB 显存下 7B 约 80% 层上卡），单题约 15~35 秒。")
 
     def build_agent():
         # 关键：LLM 与 Agent 必须共用同一个 tracer，否则 token/调用次数记不到 span 上

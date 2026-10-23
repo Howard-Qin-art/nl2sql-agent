@@ -265,7 +265,24 @@ python -m pytest tests/test_mcp_client.py -v # 动态发现 / 调用转发 / 关
 
 ## 实测数据
 
-先交代环境：全部在本机跑（RTX 3060 Laptop，但驱动 546.30 和当前 Ollama 的 CUDA 内核不兼容，所以走 **CPU 推理**，qwen2.5:7b 约 14.6 tok/s）。所以下表的本地延迟是"纯 CPU 小模型"的水平，不是这套代码的性能上限。
+先交代环境：全部在本机跑，RTX 3060 Laptop（6GB）、驱动 596.49 + Ollama 0.40.9，本地模型走 **GPU**。
+早期是驱动 546.30，与当时的 Ollama 的 CUDA 内核不兼容，只能 `num_gpu=0` 走 CPU；升级后实测可用，
+但 6GB 显存装不下 7B 的全部层，实际 GPU 占比 79%~84%（其余在内存里）。
+
+同一份 60 题、同一套代码，只换推理设备：
+
+| 指标 | CPU（驱动 546） | GPU（驱动 596） |
+|---|---|---|
+| 执行准确率（严格 / 宽松口径） | 61.2% / 85.7% | **63.3% / 93.9%** |
+| 延迟 p50 / mean | 90.0 / 96.9 s | **19.5 / 20.5 s** |
+| 全量 60 题耗时 | 96.9 min | **20.5 min** |
+| 生成速度 | 7.7 tok/s | **26.4 tok/s**（3.4×） |
+| SQL 合法率 | 98.3% | **100%** |
+| 歧义澄清召回 | 6/6 | 3/6 |
+
+准确率那 +2.1 点来自期间调过的提示词（列纪律、ROUND、排名 tie-break），不是 GPU 的功劳——
+换设备不会改变模型输出质量。**歧义澄清从 6/6 掉到 3/6 是同一批提示词收紧带来的真实退步**，
+详见下面「两个没达到预期的地方」。
 
 ### 本地 7B vs 云端 qwen-max
 
@@ -312,7 +329,10 @@ python -m pytest tests/test_mcp_client.py -v # 动态发现 / 调用转发 / 关
 | 指标 | 收紧前 | 收紧后 |
 |---|---|---|
 | 误澄清率（15 道可直答题） | 30.6% | 0% |
-| 该澄清召回（6 道歧义题） | 6/6 | 5/6 |
+| 该澄清召回（6 道歧义题，抽样复测） | 6/6 | 5/6 |
+| 该澄清召回（全量 60 题重跑） | 6/6 | **3/6** |
+
+抽样复测是 5/6，但全量重跑只有 3/6 —— **抽样低估了退步幅度**，这条要按 3/6 说。
 
 代价是漏掉了一个口径类歧义（"我们的大客户都有哪些"没有量化标准）。这是典型的准召权衡。继续调提示词的收益不大，更实际的做法是对"大客户/活跃/异常"这类词做术语白名单强制澄清，以及把澄清改成建议式（先给一版答案，再问要不要调整），而不是硬拦用户。
 
@@ -327,7 +347,9 @@ python -m pytest tests/test_mcp_client.py -v # 动态发现 / 调用转发 / 关
 
 补上的两题正好是字面完全不重叠的：「**售后赔付**金额合计多少」（库里叫退款/refund）和「**哪类东西**最贵」（口语，库里叫类目/商品）。bge-m3 是 1024 维的中文 embedding，`ollama pull bge-m3` 就有，配置一行 `NL2SQL_EMBED_MODEL=bge-m3` 启用，留空则关闭。
 
-工程上有个必须注意的点：embedding 调用也要带 `options.num_gpu=0`，否则同样会触发上面那个 CUDA 问题。向量按"模型+文本"哈希落磁盘缓存，重复调用 0.3 ms。
+工程上有个必须注意的点：embedding 和对话模型共用 `NL2SQL_OLLAMA_NUM_GPU` 这个设置。
+驱动不兼容那段时间 embedding 也会让 llama-server 崩，所以当时两边都得设 0；驱动升级后已实测 GPU embedding 正常。
+向量按"模型+文本"哈希落磁盘缓存，重复调用 0.3 ms。
 
 ### 软指标：它知不知道自己可能错
 
@@ -450,7 +472,11 @@ python -m eval.run_eval --no-rerank --tag ablate-rerank-off
 
 ## 踩过的坑
 
-1. **GPU 推理直接崩**：`CUDA error: device kernel image is invalid`，原因是驱动 546.30 和 Ollama 0.40.3 的 CUDA 内核不匹配。代码默认 `num_gpu=0` 走 CPU，并在后端里做"GPU 失败自动降级"；升级驱动后设 `NL2SQL_OLLAMA_NUM_GPU=-1` 就能用 GPU。
+1. **GPU 推理曾直接崩**：`CUDA error: device kernel image is invalid`，原因是驱动 546.30 与 Ollama 0.40.3 的 CUDA 内核不匹配，qwen 和 bge-m3 都会让 llama-server 崩。
+   当时的处理是默认 `num_gpu=0` 走 CPU，并在后端里做"GPU 失败 → 自动降级 CPU 并记忆"。
+   **驱动升级到 596.49 + Ollama 0.40.9 后实测可用**：7B 生成 7.7 → 26.4 tok/s、端到端 p50 90s → 19.5s，bge-m3 上 GPU 也正常。
+   6GB 显存装不满 7B（GPU 占比 79%~84%），想看 100% 上卡可以用 3B（85 tok/s，2.16GB）。
+   `scripts/probe_gpu.py` 可以随时复测这套结论。
 2. **临时脚本遮蔽标准库**：项目里放过一个 `inspect.py`，结果 `import inspect` 被它顶掉，pandas 之类的导入全崩。临时文件命名要避开标准库。
 3. **trace 跨题累积**：评测时 tracer 必须逐题 reset，否则 token 和调用次数是累计值，指标全废。
 4. **PowerShell 脚本编码**：`scripts/*.ps1` 里的中文注释要存成 UTF-8 带 BOM，否则 Windows PowerShell 5.1 按 GBK 读会报一堆假语法错误；执行策略会拦未签名脚本，用 `powershell -ExecutionPolicy Bypass -File` 调用。
