@@ -20,6 +20,7 @@ from app.config import SETTINGS
 from app.db.schema import all_tables_prompt, introspect
 from app.db.seed import seed_database
 from app.llm import LLMClient
+from app.memory import LongTermMemory, SessionStore, build_memory_block
 from app.tracing import Tracer
 
 
@@ -82,9 +83,30 @@ def _read_answer(prompt: str, default: str) -> str:
         return default
 
 
+def _save_turn(session: SessionStore | None, question: str, res: dict) -> None:
+    """把这一轮存进会话记忆，供下一次「那上个月呢」使用。"""
+    if session is None:
+        return
+    session.append(question,
+                   answer=res.get("answer", "") or "",
+                   sql=res.get("sql") or res.get("chosen_sql") or "",
+                   tables=res.get("linked_tables") or [])
+
+
 def cmd_ask(args: argparse.Namespace) -> int:
     if getattr(args, "mode", "pipeline") in ("tools", "mcp"):
         return _cmd_ask_tools(args)
+
+    # 记忆：session = 短期（会话内多轮），--memory = 长期（跨会话偏好）
+    session = SessionStore(args.session, max_turns=args.remember_turns) if getattr(args, "session", None) else None
+    long_term = LongTermMemory() if getattr(args, "memory", False) else None
+    memory_text = build_memory_block(args.question, long_term=long_term) if long_term else ""
+    if session is not None:
+        print(f"[记忆] 会话 {session.session_id}：已载入 {len(session.turns())} 轮历史")
+    if long_term is not None:
+        hits = long_term.recall(args.question)
+        print(f"[记忆] 长期偏好命中 {len(hits)} 条" + (f"：{'；'.join(h['text'][:24] for h in hits)}" if hits else ""))
+
     engine = _agent(args.engine)
     default_answer = args.answer or "按全部时间范围统计"
 
@@ -103,9 +125,15 @@ def cmd_ask(args: argparse.Namespace) -> int:
                 answer = _read_answer("你的补充: ", default_answer)
             out = engine.resume(answer, thread_id=out["thread_id"])
         _print_result(out)
+        _save_turn(session, args.question, out)
     else:
-        res = engine.run(args.question, clarify_handler=clarify if args.clarify else None)
-        _print_result(res.to_dict())
+        res = engine.run(args.question,
+                         history=session.history() if session else None,
+                         memory_text=memory_text,
+                         clarify_handler=clarify if args.clarify else None)
+        data = res.to_dict()
+        _print_result(data)
+        _save_turn(session, args.question, data)
     return 0
 
 
@@ -181,6 +209,42 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return eval_main()
 
 
+def cmd_memory(args: argparse.Namespace) -> int:
+    """长期记忆的增删查：`memory list / add / forget / recall`。"""
+    mem = LongTermMemory()
+    if args.action == "list":
+        rows = mem.list()
+        if not rows:
+            print('（还没有长期记忆。用 python -m app.cli memory add "成交额只算已完成订单" 加一条）')
+            return 0
+        print(f"共 {len(rows)} 条：")
+        for r in rows:
+            print(f"  {r['id']}  [{r['kind']}] {r['text']}   命中 {r['hits']} 次")
+    elif args.action == "add":
+        if not args.text:
+            print("用法：memory add \"成交额只算已完成订单\"")
+            return 2
+        fid = mem.remember(args.text, kind=args.kind)
+        print(f"已记住 {fid}：{args.text}")
+    elif args.action == "forget":
+        if not args.id:
+            print("用法：memory forget --id <记忆 id>")
+            return 2
+        print("已删除" if mem.forget(args.id) else f"没找到 id={args.id}")
+    elif args.action == "recall":
+        if not args.text:
+            print("用法：memory recall \"华东成交额\"")
+            return 2
+        rows = mem.recall(args.text)
+        if not rows:
+            print("没有匹配的记忆")
+            return 0
+        print(f"匹配 {len(rows)} 条（按相关度）：")
+        for r in rows:
+            print(f"  {r['text']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="nl2sql", description="NL2SQL 智能查询 Agent")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -193,7 +257,19 @@ def main(argv: list[str] | None = None) -> int:
     p_ask.add_argument("--steps", type=int, default=6, help="tools/mcp 模式的最大工具调用轮数")
     p_ask.add_argument("--clarify", action="store_true", help="core 引擎下开启交互式澄清")
     p_ask.add_argument("--answer", default=None, help="预置澄清答案（非交互环境用，避免等待输入）")
+    p_ask.add_argument("--session", default=None,
+                       help="会话 id：带上它就能多轮追问（如「那上个月呢」），文件名就是它的记忆")
+    p_ask.add_argument("--remember-turns", type=int, default=4, help="会话记忆保留最近几轮（默认 4）")
+    p_ask.add_argument("--memory", action="store_true",
+                       help="启用长期记忆：把匹配到的偏好/口径一起注入 Prompt")
     p_ask.set_defaults(func=cmd_ask)
+
+    p_mem = sub.add_parser("memory", help="管理长期记忆（偏好与口径）")
+    p_mem.add_argument("action", choices=["list", "add", "forget", "recall"])
+    p_mem.add_argument("text", nargs="?", default="", help="add/recall 时的内容或查询")
+    p_mem.add_argument("--kind", default="preference", help="记忆类型：preference / metric / entity")
+    p_mem.add_argument("--id", default="", help="forget 时的记忆 id")
+    p_mem.set_defaults(func=cmd_memory)
 
     p_seed = sub.add_parser("seed", help="生成/重建示例库")
     p_seed.set_defaults(func=cmd_seed)

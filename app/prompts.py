@@ -134,8 +134,9 @@ def _format_history(history: Sequence[dict[str, str]] | None) -> str:
 
 
 def build_generation_messages(question: str, schema_text: str, *, history: Sequence[dict[str, str]] | None = None,
-                              retry_hint: str | None = None) -> list[dict[str, str]]:
-    parts = [f"【相关表结构】\n{schema_text}", BUSINESS_RULES, _format_history(history)]
+                              retry_hint: str | None = None,
+                              memory_text: str | None = None) -> list[dict[str, str]]:
+    parts = [f"【相关表结构】\n{schema_text}", BUSINESS_RULES, _format_history(history), memory_text or ""]
     if retry_hint:
         parts.append(f"【上一次的错误，必须修正】\n{retry_hint}")
     parts.append("【Few-shot 示例】")

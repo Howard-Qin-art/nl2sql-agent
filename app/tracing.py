@@ -34,13 +34,16 @@ class Span:
     error: str | None = None
     # 记录本轮 span 内发生的 LLM 调用次数（节点内可能多次调模型）
     llm_calls: int = 0
+    # 可选的「原始请求/响应」：默认不记（会撑爆文件），用 NL2SQL_TRACE_LLM=1 打开，
+    # 开了之后任何一次坏结果都能完整回放：模型到底看到了什么、回了什么。
+    llm_exchanges: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "name": self.name,
             "duration_ms": round(self.duration_ms, 1),
             "prompt_tokens": self.prompt_tokens,
@@ -50,6 +53,9 @@ class Span:
             "outputs": self.outputs,
             "error": self.error,
         }
+        if self.llm_exchanges:
+            data["llm_exchanges"] = self.llm_exchanges
+        return data
 
 
 class Tracer:
@@ -84,8 +90,13 @@ class Tracer:
                     if self._stack and self._stack[-1] is sp:
                         self._stack.pop()
 
-    def record_llm(self, prompt_tokens: int = 0, completion_tokens: int = 0, calls: int = 1) -> None:
-        """把一次模型调用的用量记到当前（最内层）span 上；没有 span 就丢弃。"""
+    def record_llm(self, prompt_tokens: int = 0, completion_tokens: int = 0, calls: int = 1,
+                   exchange: dict[str, Any] | None = None) -> None:
+        """把一次模型调用的用量记到当前（最内层）span 上；没有 span 就丢弃。
+
+        exchange：可选的原始请求/响应（只有开了 NL2SQL_TRACE_LLM 才会传进来）。
+        单条内容截断，避免一条超长 prompt 把 JSONL 撑到几十 MB。
+        """
         with self._lock:
             target = self._stack[-1] if self._stack else None
         if target is None:
@@ -93,6 +104,19 @@ class Tracer:
         target.prompt_tokens += prompt_tokens
         target.completion_tokens += completion_tokens
         target.llm_calls += calls
+        if exchange:
+            trimmed = {
+                "model": exchange.get("model", ""),
+                "messages": [
+                    {"role": m.get("role", ""), "content": str(m.get("content", ""))[:1500]}
+                    for m in (exchange.get("messages") or [])
+                ],
+                "response": str(exchange.get("response", ""))[:2000],
+                "tool_calls": exchange.get("tool_calls") or [],
+            }
+            # 每个 span 最多留 8 条，再多说明这个节点调用过密，看统计就够
+            if len(target.llm_exchanges) < 8:
+                target.llm_exchanges.append(trimmed)
 
     # ---------- 汇总 ----------
     def reset(self) -> None:

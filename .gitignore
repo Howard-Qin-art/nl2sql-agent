@@ -3,6 +3,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 pytest-cache-files-*/
+.pytest-work/
+
+# ---- 运行时数据（会话记忆、长期记忆、示例库）----
+data/sessions/
+data/memory.db
 
 # ---- 虚拟环境 ----
 .venv/

@@ -507,7 +507,16 @@ class LLMClient:
     def chat(self, messages: Sequence[Message], **kwargs: Any) -> LLMResult:
         result = self.backend.chat(messages, **kwargs)
         if self.tracer is not None:
-            self.tracer.record_llm(result.prompt_tokens, result.completion_tokens)
+            exchange = None
+            # 只有显式打开 NL2SQL_TRACE_LLM 才记录原始请求/响应（否则 trace 文件会明显变大）
+            if getattr(self.s, "trace_llm", False) and getattr(self.tracer, "enabled", False):
+                exchange = {
+                    "model": result.model,
+                    "messages": list(messages),
+                    "response": result.text,
+                    "tool_calls": result.tool_calls,
+                }
+            self.tracer.record_llm(result.prompt_tokens, result.completion_tokens, exchange=exchange)
         return result
 
     def chat_json(

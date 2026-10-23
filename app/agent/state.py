@@ -59,11 +59,16 @@ class AgentState(TypedDict, total=False):
     stats: Annotated[dict, _merge_dict]
     notes: Annotated[list[str], operator.add]
 
+    # ---------- 记忆 ----------
+    memory_text: str                                  # 长期记忆（偏好/口径）拼成的 Prompt 片段
 
-def new_state(question: str, history: list[dict[str, str]] | None = None) -> AgentState:
+
+def new_state(question: str, history: list[dict[str, str]] | None = None,
+              memory_text: str = "") -> AgentState:
     return AgentState(
         question=question,
         history=list(history or []),
+        memory_text=memory_text,
         notes=[],
         attempts=[],
         repair_history=[],

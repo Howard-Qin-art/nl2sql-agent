@@ -195,7 +195,8 @@ class NL2SQLAgent:
         n = n or self.s.n_candidates
         temperature = self.s.sample_temperature if temperature is None else temperature
         messages = build_generation_messages(question, state.get("schema_text", ""),
-                                            history=state.get("history"), retry_hint=retry_hint)
+                                            history=state.get("history"), retry_hint=retry_hint,
+                                            memory_text=state.get("memory_text"))
         plans: list[dict] = []
         with self.tracer.span("generate", n=n, temperature=temperature) as sp:
             for i in range(n):
@@ -319,6 +320,7 @@ class NL2SQLAgent:
         return (self.s.price_per_1k_prompt, self.s.price_per_1k_completion)
 
     def iter_run(self, question: str, *, history: list[dict[str, str]] | None = None,
+                 memory_text: str = "",
                  clarify_handler: ClarifyHandler | None = None, tracer: Tracer | None = None,
                  cancel_event: Any = None, budget_s: float | None = None):
         """逐阶段产出事件，供 API 的 SSE 流式推送给前端画进度。
@@ -334,6 +336,7 @@ class NL2SQLAgent:
         budget = self.s.request_budget_s if budget_s is None else budget_s
         deadline = t0 + budget if budget and budget > 0 else float("inf")
         state: dict[str, Any] = {"question": question, "history": list(history or []),
+                                 "memory_text": memory_text or "",
                                  "repair_rounds": 0, "notes": [], "attempts": []}
         yield {"stage": "start", "question": question, "budget_s": budget}
 
@@ -422,11 +425,13 @@ class NL2SQLAgent:
         yield {"stage": "done", "result": finish(reason)}
 
     def run(self, question: str, *, history: list[dict[str, str]] | None = None,
+            memory_text: str = "",
             clarify_handler: ClarifyHandler | None = None, tracer: Tracer | None = None,
             cancel_event: Any = None, budget_s: float | None = None) -> AgentResult:
         """跑完整轮并返回 AgentResult（内部复用 iter_run，保证流式与一次性调用行为一致）。"""
         final: dict[str, Any] | None = None
-        for event in self.iter_run(question, history=history, clarify_handler=clarify_handler, tracer=tracer,
+        for event in self.iter_run(question, history=history, memory_text=memory_text,
+                                   clarify_handler=clarify_handler, tracer=tracer,
                                    cancel_event=cancel_event, budget_s=budget_s):
             if event.get("stage") == "done":
                 final = event["result"]

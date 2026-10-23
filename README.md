@@ -49,7 +49,7 @@ python -m app.cli ui                   # Streamlit 聊天界面，http://127.0.0
 跑测试和评测：
 
 ```powershell
-python -m pytest tests -q              # 85 个用例，不依赖模型，十几秒跑完
+python -m pytest tests -q              # 98 个用例，不依赖模型，十几秒跑完
 python -m eval.run_eval --limit 10     # 先跑 10 题试水
 python -m eval.run_eval                # 全量 60 题，出 markdown 报告
 ```
@@ -137,6 +137,54 @@ python -m app.cli ask "一共有多少个客户？" --mode mcp     # 模型自�
 | 代价 | 流程之外的问题走不通 | 依赖模型能力，小模型容易乱调 |
 
 工具自主模式还没有在 60 题基准上跑过，所以下面的准确率不能算在它头上。
+
+## 记忆：会话内多轮 + 跨会话偏好
+
+分两层，解决的问题不一样。
+
+**短期（会话内）** —— 让「那上个月呢」这类追问接得上。带 `--session` 跑，默认记最近 4 轮：
+
+```powershell
+python -m app.cli ask "一共有多少个客户？" --session demo1
+python -m app.cli ask "那已取消的订单有多少？" --session demo1
+# [记忆] 会话 demo1：已载入 1 轮历史
+```
+
+存的是最近几轮的问题与结论（不塞整段 SQL，省 token），拼进生成 Prompt 供指代消解；
+落在 `data/sessions/<id>.json`，随时可删。
+
+**长期（跨会话）** —— 记住口径和偏好，不用每轮重复交代：
+
+```powershell
+python -m app.cli memory add "成交额只算已完成订单" --kind metric
+python -m app.cli memory list
+python -m app.cli memory recall "华东成交额"      # 按关键词相关度召回
+python -m app.cli ask "华东这个月成交额多少？" --memory
+```
+
+召回用 token 重叠打分（中文按字 + 二字组），相关度低于阈值的不注入，避免把无关偏好塞进上下文。
+记忆是**人能读能删的文本**，不是隐向量；SQLite 一张表，`memory forget --id xxx` 就能删。
+
+两个刻意的限制：短期只留最近 N 轮，防止上下文越来越长；长期只注入 top-3 且要过阈值，
+防止"我记了很多"变成"prompt 里塞一堆无关的话"。
+
+## 可观测：逐节点 trace
+
+每个节点开一个 span，记录耗时、token、LLM 调用次数与错误，落成 JSONL：
+
+```
+trace c5e0d6c154ac  110431 ms
+  link_schema             22911.3 ms  llm=1  tok=539/31
+  check_ambiguity         45139.4 ms  llm=1  tok=2171/18
+  generate                39630.6 ms  llm=3  tok=6783/192
+  execute_candidates         15.2 ms  llm=0  tok=0/0
+  synthesize               2722.9 ms  llm=1  tok=95/8
+```
+
+时间花在哪一眼就能看出来：本地 CPU 上这一问 110 秒，判歧义和生成占掉 85 秒。
+
+默认只记计数，**不记模型的原始请求和响应**（否则文件会很大）。排查坏样本时开 `NL2SQL_TRACE_LLM=1`，
+每个 span 会带上模型收到的 messages 和返回内容（各截断到 2k 字符），这样任何一次翻车都能完整回放。
 
 ## MCP：既能当 Server，也能当 Client
 
@@ -285,7 +333,8 @@ nl2sql-agent/
 ├── app/
 │   ├── config.py           环境变量/.env 集中配置（也是消融实验开关）
 │   ├── llm.py              后端：Ollama 原生 API + OpenAI 兼容 + Fake（测试用）
-│   ├── tracing.py          逐节点耗时/token/成本，JSONL 落盘
+│   ├── tracing.py          逐节点耗时/token/成本，JSONL 落盘（可选记录模型原始请求）
+│   ├── memory.py           短期会话记忆（多轮）+ 长期偏好记忆（SQLite + 关键词召回）
 │   ├── guardrails.py       sqlglot AST 只读护栏 + 结果集规范化
 │   ├── schema_linker.py    BM25 + 值命中 + 外键扩展 + RRF + 可选向量 + LLM 重排
 │   ├── prompts.py          Prompt 体系（业务口径、few-shot、自愈、澄清、解释）
@@ -297,8 +346,8 @@ nl2sql-agent/
 │       agent/tool_loop.py                      工具调用循环
 │       agent/mcp_client.py                     MCP 客户端
 ├── mcp_server.py           MCP Server（stdio），把查询能力暴露成 4 个工具
-├── eval/{questions.jsonl, metrics.py, run_eval.py}   题库 + 指标 + 评测执行器
-├── tests/                  85 个测试用例
+├── eval/{questions.jsonl, metrics.py, run_eval.py, manifest.py}   题库 + 指标 + 评测执行器 + 复现清单
+├── tests/                  98 个测试用例
 ├── ui/streamlit_app.py     聊天界面
 ├── scripts/                题库构建、各阶段验证脚本
 ├── Dockerfile / docker-compose.yml
@@ -318,6 +367,18 @@ $env:NL2SQL_N_CANDIDATES=1      ; python -m eval.run_eval --tag ablate-vote-off
 $env:NL2SQL_MAX_REPAIR_ROUNDS=0 ; python -m eval.run_eval --tag ablate-repair-off
 python -m eval.run_eval --no-rerank --tag ablate-rerank-off
 ```
+
+**每次评测都会落一份 manifest**（`eval/manifest.py`），把"现场"记下来：git commit 与分支、
+是否有未提交改动、后端与模型、候选数、温度、几个关键文件的指纹（`prompts.py` / `schema_linker.py` /
+`guardrails.py` / 题库）。报告末尾会附一行：
+
+```
+复现信息：commit `97130cc`@main｜模型 `qwen-max`｜backend `openai`｜N=3｜
+         strict=True｜prompts.py#`a0b8529983615b77`｜题库#`805047ddc363b1c1`
+```
+
+起因是改完提示词之后，"之前那个数字到底对应哪一版"说不清了 —— 有了指纹就能直接比对：
+提示词文件哈希一变，说明数字不能和老版本横向比。
 
 ## 响应速度
 

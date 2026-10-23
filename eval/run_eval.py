@@ -34,6 +34,7 @@ from app.db.seed import seed_database, table_counts  # noqa: E402
 from app.guardrails import validate_sql  # noqa: E402
 from app.llm import LLMClient  # noqa: E402
 from app.tracing import Tracer  # noqa: E402
+from eval.manifest import build_manifest, describe as manifest_describe  # noqa: E402
 from eval.metrics import markdown_report, results_equal, sql_normalized, summarize  # noqa: E402
 
 CLARIFY_ANSWER = "按全部时间范围、以成交额和订单数作为指标统计"
@@ -223,13 +224,17 @@ def main() -> int:
     summary["llm_rerank"] = not args.no_rerank
     summary["data_integrity_ok"] = integrity
     summary["wall_clock_s"] = round(time.time() - t_start, 1)
+    # 现场快照：代码版本 + 关键配置 + 关键文件指纹，保证「这个数字对应哪一版」可查
+    summary["manifest"] = build_manifest(settings, ROOT / "eval" / "questions.jsonl")
 
     summary_path = out_dir / f"{tag}_summary.json"
     report_path = out_dir / f"{tag}_report.md"
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    report_path.write_text(markdown_report(summary, model=effective_model,
-                                           candidates=settings.n_candidates, engine=args.engine),
-                           encoding="utf-8")
+    report_body = markdown_report(summary, model=effective_model,
+                                  candidates=settings.n_candidates, engine=args.engine)
+    # 报告末尾附一行可复现信息
+    report_body = report_body.rstrip() + "\n\n> " + manifest_describe(summary["manifest"]) + "\n"
+    report_path.write_text(report_body, encoding="utf-8")
 
     print("\n" + "=" * 70)
     print(f"完成：{summary['n_questions']} 题，用时 {summary['wall_clock_s']/60:.1f} 分钟")

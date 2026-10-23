@@ -111,6 +111,8 @@ class Settings:
     # ---------- Trace / 成本 ----------
     trace_dir: Path = field(default_factory=lambda: ROOT / "traces")
     trace_enabled: bool = True
+    # 是否在 trace 里记录模型原始请求/响应（默认关：文件会明显变大，排查问题时再开）
+    trace_llm: bool = False
     # 单位：元 / 千 token（云端后端用来估算成本；本地 Ollama 记为 0）
     price_per_1k_prompt: float = 0.0
     price_per_1k_completion: float = 0.0
@@ -147,6 +149,7 @@ class Settings:
         s.default_limit = _env_int("NL2SQL_DEFAULT_LIMIT", s.default_limit)
         s.trace_dir = Path(_env_str("NL2SQL_TRACE_DIR", str(s.trace_dir)))
         s.trace_enabled = _env_bool("NL2SQL_TRACE", s.trace_enabled)
+        s.trace_llm = _env_bool("NL2SQL_TRACE_LLM", s.trace_llm)
         if s.llm_backend == "openai":
             s.price_per_1k_prompt = _env_float("NL2SQL_PRICE_PROMPT", 0.001)
             s.price_per_1k_completion = _env_float("NL2SQL_PRICE_COMPLETION", 0.002)
