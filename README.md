@@ -323,8 +323,6 @@ python -m eval.run_eval --no-rerank --tag ablate-rerank-off
    docker tag  docker.m.daocloud.io/library/redis:7-alpine redis:7-alpine
    ```
 
-## 许可以及一句题外话
+## 许可
 
 暂未指定许可证，商业用途请先联系作者。
-
-这个项目里"想清楚"的部分比"写代码"的部分费劲得多：每一个设计背后基本都有一次失败的尝试。所以如果看到某处觉得"这里为什么这么绕"，大概率是之前那么简单做过、然后撞墙了。
