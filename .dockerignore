@@ -1,0 +1,22 @@
+# 镜像构建上下文里排掉的东西（不改代码，只是别打进镜像）
+.git
+.gitignore
+.github
+.env
+.env.*
+!.env.example
+__pycache__
+*.py[cod]
+.pytest_cache
+.pytest-work
+.venv
+venv
+data/
+traces/
+eval/results/
+eval/reports/
+*.log
+*.md
+docs/
+RESUME.md
+README.md

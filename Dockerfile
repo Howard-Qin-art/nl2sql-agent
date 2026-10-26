@@ -1,5 +1,14 @@
 # NL2SQL Agent 镜像：API 服务（LLM 走外部 Ollama 或云端 API）
-FROM python:3.10-slim
+#
+# 两个 ARG 是为了「国内网络」也能构建：
+#   docker build -t nl2sql-agent:dev \
+#     --build-arg BASE_IMAGE=docker.m.daocloud.io/library/python:3.10-slim \
+#     --build-arg PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple .
+# 不传就是官方源，海外环境不用改。
+ARG BASE_IMAGE=python:3.10-slim
+FROM ${BASE_IMAGE}
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -9,13 +18,14 @@ WORKDIR /app
 
 # 依赖单独一层，改代码不会触发重装
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
 
 COPY app ./app
 COPY eval ./eval
 COPY ui ./ui
 COPY scripts ./scripts
 COPY tests ./tests
+COPY mcp_server.py .
 
 # 构建镜像时就把示例库生成好，容器起来即可查询
 RUN python -m app.db.seed

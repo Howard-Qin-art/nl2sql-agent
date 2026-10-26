@@ -61,6 +61,40 @@ SQL    : SELECT STRFTIME('%Y-%m', o.order_date) AS ym, ROUND(SUM(o.total_amount)
 
 这段输出差不多就是它的全部工作：选了哪几张表、写了什么 SQL、查出多少行、三条候选一不一致、花了多久。
 
+## 用 Docker 起服务
+
+镜像里已经把示例库 seed 好了，起来就能查（LLM 走容器外的 Ollama 或云端 API）：
+
+```powershell
+# 构建（国内网络：基础镜像和 pip 源都能换）
+docker build -t nl2sql-agent:dev `
+  --build-arg BASE_IMAGE=docker.m.daocloud.io/library/python:3.10-slim `
+  -f Dockerfile .
+
+# 跑起来（把宿主机的 Ollama 暴露给容器）
+docker run -d --name nl2sql-api -p 8010:8000 `
+  -e NL2SQL_LLM_BACKEND=ollama `
+  -e NL2SQL_OLLAMA_BASE=http://host.docker.internal:11434 `
+  -e NL2SQL_OLLAMA_NUM_GPU=-1 `
+  nl2sql-agent:dev
+
+curl http://127.0.0.1:8010/health
+```
+
+实测（Docker Desktop 29.8.2，镜像 924 MB，容器内存约 80 MB）：
+
+| 接口 | 结果 |
+|---|---|
+| `/health` | 200，`tables=9`，后端 ollama |
+| `/query` | 200，返回 SQL + 结论「华东大区已完成订单的总成交额为 4,897,710.21 元」，一致度 1.0，6 次模型调用 / 9970 token / 20.4 秒 |
+| `/query/stream` | 200，`Content-Type: text/event-stream`，事件依次 `start → guard_input → link_schema → check_ambiguity` |
+
+Dockerfile 里几个刻意的点：依赖单独一层（改代码不会重装依赖）、构建期就 seed 示例库、`HEALTHCHECK` 打 `/health`、
+`data/` 可以只读挂载、两个 `ARG` 让基础镜像和 pip 源都能替换。
+
+**踩坑**：容器内访问国内 pypi 镜像（清华 / 阿里云）会返回 403，反而官方 `pypi.org` 在容器里是通的；
+所以默认用官方源，国内构建时只替换基础镜像即可。
+
 ## 一条问题进来之后
 
 ```mermaid
