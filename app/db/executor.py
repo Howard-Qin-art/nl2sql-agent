@@ -64,6 +64,9 @@ class SQLExecutor:
             raise FileNotFoundError(f"数据库不存在: {self.db_path}（先跑 python -m app.db.seed）")
         conn = sqlite3.connect(f"file:{self.db_path.as_posix()}?mode=ro", uri=True, timeout=self.timeout_s)
         conn.execute("PRAGMA query_only=1")
+        # 排序/去重产生的临时表放内存，不落到系统临时目录（Windows 下默认在 C 盘）。
+        # 顺带也更快：大数据集上避免临时文件读写。
+        conn.execute("PRAGMA temp_store=MEMORY")
         return conn
 
     def _deadline_handler(self, deadline: float):
