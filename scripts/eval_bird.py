@@ -44,24 +44,65 @@ def gold_rows(db: Path, sql: str) -> list[tuple]:
         conn.close()
 
 
+def sample_stratified(items: list[dict], per_db: int) -> list[dict]:
+    """每个库取前 per_db 题，避免只落在文件开头那一个库上。"""
+    buckets: dict[str, list[dict]] = {}
+    for q in items:
+        buckets.setdefault(q["db_id"], []).append(q)
+    picked: list[dict] = []
+    for db_id in sorted(buckets):
+        picked.extend(buckets[db_id][:per_db])
+    return picked
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=10)
+    ap.add_argument("--limit", type=int, default=None, help="只跑前 N 题（中文题集也同样适用）")
     ap.add_argument("--all", action="store_true", help="跑全部 500 题")
+    ap.add_argument("--per-db", type=int, default=0, help="每个库各取 N 题（分层抽样，推荐 3~5）")
     ap.add_argument("--difficulty", default=None, choices=["simple", "moderate", "challenging", "unknown"])
     ap.add_argument("--tag", default="bird-smoke")
     ap.add_argument("--model", default=None, help="覆盖模型名（默认用 .env 里的）")
     ap.add_argument("--no-evidence", action="store_true", help="不给 evidence 提示（更严格）")
     ap.add_argument("--bird-dir", default=str(BIRD_DIR))
+    ap.add_argument("--zh-file", default=None,
+                    help="中文题集（scripts/make_zh_bird.py 产出）；给了就按中文提问评测")
+    ap.add_argument("--lang", default=None, choices=["zh", "zh-general", "en"],
+                    help="Prompt 语言模式：中文题集用 zh-general（不带电商业务口径）")
     args = ap.parse_args()
 
     bird_dir = Path(args.bird_dir)
-    qs = load_questions(bird_dir, limit=None if args.all else args.limit, difficulty=args.difficulty)
-    print(f"题目 {len(qs)} 道 | 库目录 {bird_dir}")
+    if args.zh_file:
+        zh_rows = json.loads(Path(args.zh_file).read_text(encoding="utf-8"))
+        qs = [{
+            "question_id": r.get("question_id"),
+            "db_id": r["db_id"],
+            "question": r["question_zh"],
+            "evidence": r.get("evidence_zh") or "",
+            "SQL": r["gold_sql"],
+            "difficulty": r.get("difficulty", "unknown"),
+        } for r in zh_rows]
+        if not args.all and args.limit:
+            qs = qs[: args.limit]
+        args.lang = args.lang or "zh-general"
+        print(f"中文题集：{args.zh_file}")
+    else:
+        qs = load_questions(bird_dir, limit=None if (args.all or args.per_db) else args.limit,
+                            difficulty=args.difficulty)
+        if args.per_db:
+            qs = sample_stratified(qs, args.per_db)
+        elif not args.all:
+            qs = qs[: args.limit]
+        args.lang = args.lang or ("en" if args.difficulty is None else "en")
+    print(f"题目 {len(qs)} 道（{len({q['db_id'] for q in qs})} 个库）| 库目录 {bird_dir} | lang={args.lang}")
 
     settings = SETTINGS
     if args.model:
         settings = dataclasses.replace(settings, model=args.model)
+    # 评测口径：关掉「自动补 LIMIT」。
+    # 产品里明细查询自动 LIMIT 100 是对的（防止刷屏），但 BIRD 的 gold SQL 会返回几千行，
+    # 补 LIMIT 会把正确答案截断，导致执行准确率被低估。这里把上限放大，让结果集完整。
+    settings = dataclasses.replace(settings, default_limit=10_000_000)
     tracer = Tracer(enabled=False)
     llm = LLMClient(settings=settings, tracer=tracer)
 
@@ -93,7 +134,7 @@ def main() -> int:
 
             st = dataclasses.replace(settings, db_path=db_file)
             agent = NL2SQLAgent(settings=st, llm=llm, docs=docs, tracer=tracer,
-                                lang="en", use_clarify=False, use_summary=False)
+                                lang=args.lang, use_clarify=False, use_summary=False)
             t0 = time.perf_counter()
             try:
                 res = agent.run(question)

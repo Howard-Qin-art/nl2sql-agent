@@ -149,18 +149,37 @@ JSON contract:
 """
 
 
+SYSTEM_SQL_ZH_GENERAL = """你是一位严谨的数据分析工程师，负责把中文问题翻译成一条 SQLite 查询。
+
+硬性要求：
+1. 只输出一条 SELECT（可用 WITH / 子查询 / UNION），绝不写操作；
+2. 只能用给定 schema 里的表和列，不要臆造表名或列名；
+3. 明细查询要带 LIMIT，聚合查询不需要；
+4. 日期按 'YYYY-MM-DD' 文本存储，可用 strftime / CAST / ROUND / IIF；
+5. 如果给了提示（Hints），它定义了业务术语和取值格式，必须照做；
+6. 只输出 JSON，不要 markdown 代码块，不要多余文字。
+
+JSON 契约：
+{"sql": "一条 SELECT 语句", "tables_used": ["表名"], "explanation": "一句话解释",
+ "confidence": 0.0, "needs_clarification": false, "clarify_question": ""}
+"""
+
+
 def build_generation_messages(question: str, schema_text: str, *, history: Sequence[dict[str, str]] | None = None,
                               retry_hint: str | None = None,
                               memory_text: str | None = None,
                               lang: str = "zh") -> list[dict[str, str]]:
-    if lang == "en":
-        # 英文模式（公开数据集用）：不带电商业务口径，也不塞 few-shot（那是中文电商的）
-        parts = [f"【Schema】\n{schema_text}", _format_history(history), memory_text or ""]
+    if lang in ("en", "zh-general"):
+        # 公开数据集模式：不带电商业务口径，也不塞中文电商 few-shot
+        en = lang == "en"
+        system = SYSTEM_SQL_EN if en else SYSTEM_SQL_ZH_GENERAL
+        parts = [f"【{'Schema' if en else '相关表结构'}】\n{schema_text}", _format_history(history), memory_text or ""]
         if retry_hint:
-            parts.append(f"【Previous attempt failed — fix it】\n{retry_hint}")
-        parts.append(f"【Question】\n{question}\n\nRespond with the JSON contract only.")
+            parts.append(f"【{'Previous attempt failed — fix it' if en else '上一次的错误，必须修正'}】\n{retry_hint}")
+        parts.append(f"【{'Question' if en else '问题'}】\n{question}\n\n"
+                     + ("Respond with the JSON contract only." if en else "请按 JSON 契约输出。"))
         return [
-            {"role": "system", "content": SYSTEM_SQL_EN},
+            {"role": "system", "content": system},
             {"role": "user", "content": "\n\n".join(p for p in parts if p)},
         ]
     parts = [f"【相关表结构】\n{schema_text}", BUSINESS_RULES, _format_history(history), memory_text or ""]
@@ -179,18 +198,31 @@ def build_generation_messages(question: str, schema_text: str, *, history: Seque
 def build_repair_messages(question: str, schema_text: str, bad_sql: str, error: str,
                           *, history: Sequence[dict[str, str]] | None = None,
                           lang: str = "zh") -> list[dict[str, str]]:
-    if lang == "en":
-        user = (
-            f"【Schema】\n{schema_text}\n\n"
-            f"【Question】\n{question}\n\n"
-            f"【SQL that failed】\n{bad_sql}\n\n"
-            f"【Database error】\n{error}\n\n"
-            "Diagnose the cause (misspelled column, wrong table, wrong function, wrong aggregation level) "
-            "and make the MINIMAL fix. Do not introduce new tables or columns. "
-            "Respond with the JSON contract only."
-        )
+    if lang in ("en", "zh-general"):
+        en = lang == "en"
+        if en:
+            user = (
+                f"【Schema】\n{schema_text}\n\n"
+                f"【Question】\n{question}\n\n"
+                f"【SQL that failed】\n{bad_sql}\n\n"
+                f"【Database error】\n{error}\n\n"
+                "Diagnose the cause (misspelled column, wrong table, wrong function, wrong aggregation level) "
+                "and make the MINIMAL fix. Do not introduce new tables or columns. "
+                "Respond with the JSON contract only."
+            )
+            system = SYSTEM_SQL_EN
+        else:
+            user = (
+                f"【相关表结构】\n{schema_text}\n\n"
+                f"【原始问题】\n{question}\n\n"
+                f"【上一次生成的 SQL（执行失败）】\n{bad_sql}\n\n"
+                f"【数据库返回的原始错误】\n{error}\n\n"
+                "请分析错误原因（列名拼错？表名不对？函数用错？聚合层级不对？），做**最小必要修改**后重新给出 SQL。"
+                "不要引入新的表或列。按 JSON 契约输出。"
+            )
+            system = SYSTEM_SQL_ZH_GENERAL
         return [
-            {"role": "system", "content": SYSTEM_SQL_EN},
+            {"role": "system", "content": system},
             {"role": "user", "content": user},
         ]
     user = (
