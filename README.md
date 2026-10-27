@@ -95,6 +95,42 @@ Dockerfile 里几个刻意的点：依赖单独一层（改代码不会重装依
 **踩坑**：容器内访问国内 pypi 镜像（清华 / 阿里云）会返回 403，反而官方 `pypi.org` 在容器里是通的；
 所以默认用官方源，国内构建时只替换基础镜像即可。
 
+### docker compose：API + Ollama 双服务
+
+`docker-compose.yml` 里是两个服务：`api`（本项目镜像）和 `ollama`（推理服务）。
+
+```powershell
+# 默认：容器里起一个 Ollama（首次需要 pull 模型）
+docker compose up -d
+docker compose exec ollama ollama pull qwen2.5:7b
+
+# 更省事：复用宿主机已经 pull 好的模型，并连宿主机 Ollama（跳过 ollama 服务）
+$env:OLLAMA_MODELS_DIR='C:/Users/<you>/.ollama/models'
+$env:OLLAMA_BASE='http://host.docker.internal:11434'
+$env:NL2SQL_MODEL='qwen2.5:7b'
+$env:NL2SQL_OLLAMA_NUM_GPU='-1'
+docker compose up -d --no-deps api
+```
+
+compose 文件里几个刻意的点：`ollama` 默认只在内网 `expose: 11434`（不占宿主机端口，避免和本机已装的
+Ollama 抢）、模型目录可用 `OLLAMA_MODELS_DIR` 指向宿主机（省掉几个 G 的重复下载）、
+模型/候选数/GPU 开关都能用环境变量覆盖。
+
+实测（Docker Desktop 29.8.2）：
+
+```
+api | Up (healthy) | 0.0.0.0:8010->8000/tcp
+[health] 表数=9 后端=ollama 模型=qwen2.5:7b
+[query]  SQL  : SELECT ROUND(SUM(o.total_amount), 2) AS gmv FROM orders AS o JOIN region AS r ...
+         结论 : 华东大区已完成订单的总成交额为4,897,710.21元。
+         trace: LLM 4 次 | token 5236 | 18660 ms
+[sse]    text/event-stream，事件 start → guard_input → link_schema → check_ambiguity
+```
+
+**诚实交代**：`ollama/ollama:latest` 这个镜像在我这边拉不下来（Docker Hub 不通，试的三个国内镜像源
+都没有白名单），所以 compose 的双服务是用「api 服务 + 宿主机 Ollama」验证的——
+编排本身、环境变量注入、依赖声明、健康检查都验过；`ollama` 服务只做到 `docker compose config` 解析通过。
+
 ## 一条问题进来之后
 
 ```mermaid

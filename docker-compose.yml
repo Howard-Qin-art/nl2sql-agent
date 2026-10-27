@@ -4,18 +4,25 @@
 #   - ollama 首次启动后需要拉模型：docker compose exec ollama ollama pull qwen2.5:7b
 #   - 容器内 GPU 推理需要 NVIDIA Container Toolkit；没有 GPU 时 Ollama 会自动用 CPU
 #     （Agent 侧默认 num_gpu=0，等价于强制 CPU，避免驱动/内核不匹配把服务打崩）
+#   - 宿主机已经装过 Ollama 并 pull 过模型时，可以直接复用本机模型，省掉容器里再下一遍：
+#       OLLAMA_MODELS_DIR=C:/Users/<you>/.ollama/models docker compose up -d
+#   - ollama 默认只在内网暴露 11434，不发布到宿主机，避免和本机已装的 Ollama 抢端口
 services:
   api:
     build: .
+    image: nl2sql-agent:latest
     ports:
-      - "8000:8000"
+      - "${API_PORT:-8000}:8000"
     environment:
       NL2SQL_LLM_BACKEND: ollama
-      NL2SQL_MODEL: qwen2.5:7b
-      NL2SQL_OLLAMA_BASE: http://ollama:11434
-      NL2SQL_OLLAMA_NUM_GPU: "0"
-      NL2SQL_N_CANDIDATES: "3"
-      NL2SQL_MAX_REPAIR_ROUNDS: "2"
+      NL2SQL_MODEL: ${NL2SQL_MODEL:-qwen2.5:7b}
+      # 默认连 compose 里的 ollama 服务；宿主机已有 Ollama 时可用
+      #   OLLAMA_BASE=http://host.docker.internal:11434 docker compose up -d --no-deps api
+      NL2SQL_OLLAMA_BASE: ${OLLAMA_BASE:-http://ollama:11434}
+      NL2SQL_OLLAMA_NUM_GPU: ${NL2SQL_OLLAMA_NUM_GPU:-0}
+      NL2SQL_N_CANDIDATES: ${NL2SQL_N_CANDIDATES:-3}
+      NL2SQL_MAX_REPAIR_ROUNDS: ${NL2SQL_MAX_REPAIR_ROUNDS:-2}
+      NL2SQL_TRACE: ${NL2SQL_TRACE:-true}
     volumes:
       - ./data:/app/data:ro
       - ./traces:/app/traces
@@ -25,10 +32,14 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    # 想在宿主机直接调容器里的 Ollama（比如自测 /api/tags），把下面两行注释打开
+    # ports:
+    #   - "11434:11434"
+    expose:
+      - "11434"
     volumes:
-      - ollama-models:/root/.ollama
+      # 默认命名卷；给了 OLLAMA_MODELS_DIR 就复用宿主机已有模型
+      - ${OLLAMA_MODELS_DIR:-ollama-models}:/root/.ollama/models
     restart: unless-stopped
 
 volumes:
