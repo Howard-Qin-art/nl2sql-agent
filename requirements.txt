@@ -24,10 +24,10 @@ streamlit>=1.36
 # ---- MCP（把查询能力暴露成标准工具，供 Claude Desktop / Cursor 等客户端调用）----
 mcp>=2.3
 
-# ---- 可选：记忆存 Redis 时才需要（默认落本地文件 + SQLite，不需要它）----
-#   pip install redis
+# ---- 记忆存 Redis 时需要（compose 里带 redis 服务，所以默认装上；不想要可注释）----
 #   NL2SQL_MEMORY_BACKEND=redis  NL2SQL_REDIS_URL=redis://127.0.0.1:6379/0
-# redis>=5.0
+#   不用 Redis 时后端默认是 local（JSON 文件 + SQLite），装了也不影响
+redis>=5.0
 
 # ---- 测试 ----
 pytest>=8.0

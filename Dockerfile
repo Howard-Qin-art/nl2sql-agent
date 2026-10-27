@@ -11,14 +11,15 @@ FROM ${BASE_IMAGE}
 ARG PIP_INDEX_URL=https://pypi.org/simple
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONDONTWRITEBYTECODE=1
 
 WORKDIR /app
 
-# 依赖单独一层，改代码不会触发重装
+# 依赖单独一层 + BuildKit 缓存挂载：requirements 有变动时只重装变化的包，
+# 不会每次都把 langgraph/pandas/streamlit 全下一遍。
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i ${PIP_INDEX_URL} -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install -i ${PIP_INDEX_URL} -r requirements.txt
 
 COPY app ./app
 COPY eval ./eval

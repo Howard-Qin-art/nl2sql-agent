@@ -23,11 +23,29 @@ services:
       NL2SQL_N_CANDIDATES: ${NL2SQL_N_CANDIDATES:-3}
       NL2SQL_MAX_REPAIR_ROUNDS: ${NL2SQL_MAX_REPAIR_ROUNDS:-2}
       NL2SQL_TRACE: ${NL2SQL_TRACE:-true}
+      # 记忆后端进容器后指向 redis 服务（本地跑默认是 local：JSON 文件 + SQLite）
+      NL2SQL_MEMORY_BACKEND: ${NL2SQL_MEMORY_BACKEND:-redis}
+      NL2SQL_REDIS_URL: ${NL2SQL_REDIS_URL:-redis://redis:6379/0}
+      NL2SQL_SESSION_TTL: ${NL2SQL_SESSION_TTL:-604800}
     volumes:
       - ./data:/app/data:ro
       - ./traces:/app/traces
     depends_on:
       - ollama
+      - redis
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # 开 AOF：容器重启后会话记忆和偏好还在（不想要持久化就去掉 command）
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    # 想在宿主机用 redis-cli 连进来排查，把下面一行注释打开
+    # ports:
+    #   - "6379:6379"
+    volumes:
+      - redis-data:/data
     restart: unless-stopped
 
   ollama:
@@ -44,3 +62,4 @@ services:
 
 volumes:
   ollama-models:
+  redis-data:
