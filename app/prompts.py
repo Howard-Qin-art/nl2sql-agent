@@ -133,9 +133,36 @@ def _format_history(history: Sequence[dict[str, str]] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+SYSTEM_SQL_EN = """You are a meticulous data analyst. Translate the user's question into ONE SQLite SELECT statement.
+
+Hard rules:
+1. Output exactly one SELECT (WITH / subquery / UNION allowed). Never a write operation.
+2. Only use tables and columns that appear in the provided schema; never invent names.
+3. Detail queries need a LIMIT; aggregations do not.
+4. Dates are stored as 'YYYY-MM-DD' text; SQLite functions (strftime, CAST, ROUND, IIF) are available.
+5. If hints are provided, they define business terms and value formats — follow them exactly.
+6. Output JSON only: no markdown fences, no extra prose.
+
+JSON contract:
+{"sql": "one SELECT statement", "tables_used": ["table names"], "explanation": "one sentence",
+ "confidence": 0.0, "needs_clarification": false, "clarify_question": ""}
+"""
+
+
 def build_generation_messages(question: str, schema_text: str, *, history: Sequence[dict[str, str]] | None = None,
                               retry_hint: str | None = None,
-                              memory_text: str | None = None) -> list[dict[str, str]]:
+                              memory_text: str | None = None,
+                              lang: str = "zh") -> list[dict[str, str]]:
+    if lang == "en":
+        # 英文模式（公开数据集用）：不带电商业务口径，也不塞 few-shot（那是中文电商的）
+        parts = [f"【Schema】\n{schema_text}", _format_history(history), memory_text or ""]
+        if retry_hint:
+            parts.append(f"【Previous attempt failed — fix it】\n{retry_hint}")
+        parts.append(f"【Question】\n{question}\n\nRespond with the JSON contract only.")
+        return [
+            {"role": "system", "content": SYSTEM_SQL_EN},
+            {"role": "user", "content": "\n\n".join(p for p in parts if p)},
+        ]
     parts = [f"【相关表结构】\n{schema_text}", BUSINESS_RULES, _format_history(history), memory_text or ""]
     if retry_hint:
         parts.append(f"【上一次的错误，必须修正】\n{retry_hint}")
@@ -150,7 +177,22 @@ def build_generation_messages(question: str, schema_text: str, *, history: Seque
 
 
 def build_repair_messages(question: str, schema_text: str, bad_sql: str, error: str,
-                          *, history: Sequence[dict[str, str]] | None = None) -> list[dict[str, str]]:
+                          *, history: Sequence[dict[str, str]] | None = None,
+                          lang: str = "zh") -> list[dict[str, str]]:
+    if lang == "en":
+        user = (
+            f"【Schema】\n{schema_text}\n\n"
+            f"【Question】\n{question}\n\n"
+            f"【SQL that failed】\n{bad_sql}\n\n"
+            f"【Database error】\n{error}\n\n"
+            "Diagnose the cause (misspelled column, wrong table, wrong function, wrong aggregation level) "
+            "and make the MINIMAL fix. Do not introduce new tables or columns. "
+            "Respond with the JSON contract only."
+        )
+        return [
+            {"role": "system", "content": SYSTEM_SQL_EN},
+            {"role": "user", "content": user},
+        ]
     user = (
         f"【相关表结构】\n{schema_text}\n\n"
         f"【业务口径】\n{BUSINESS_RULES}\n\n"
@@ -181,7 +223,20 @@ def build_rerank_messages(question: str, candidates_text: str) -> list[dict[str,
     ]
 
 
-def build_clarify_messages(question: str, schema_text: str) -> list[dict[str, str]]:
+def build_clarify_messages(question: str, schema_text: str, *, lang: str = "zh") -> list[dict[str, str]]:
+    if lang == "en":
+        return [
+            {"role": "system", "content": SYSTEM_SQL_EN},
+            {
+                "role": "user",
+                "content": (
+                    f"【Schema】\n{schema_text}\n\n【Question】\n{question}\n\n"
+                    "Decide whether this question MUST be clarified before a unique answer is possible.\n"
+                    "Be strict: if a reasonable default (all time, descending order, top 10) makes it answerable, do NOT clarify.\n"
+                    'Output JSON only: {"ambiguous": true/false, "question": "one clarifying sentence", "confidence": 0.0}'
+                ),
+            },
+        ]
     return [
         {"role": "system", "content": SYSTEM_SQL},
         {
@@ -211,10 +266,22 @@ def build_clarify_messages(question: str, schema_text: str) -> list[dict[str, st
 
 
 def build_answer_messages(question: str, sql: str, columns: Sequence[str], rows: Sequence[Sequence[Any]],
-                          *, row_count: int) -> list[dict[str, str]]:
+                          *, row_count: int, lang: str = "zh") -> list[dict[str, str]]:
     preview = "\n".join(
         " | ".join(str(v) for v in row) for row in list(rows)[:10]
     )
+    if lang == "en":
+        return [
+            {"role": "system", "content": "You are a data analyst. Answer concisely in English."},
+            {
+                "role": "user",
+                "content": (
+                    f"【Question】{question}\n\n【SQL executed】\n{sql}\n\n"
+                    f"【Result】{row_count} rows, columns: {', '.join(columns)}\n{preview}\n\n"
+                    "Give the conclusion in 1-3 sentences with the key numbers. Do not explain the SQL."
+                ),
+            },
+        ]
     return [
         {"role": "system", "content": "你是数据分析助手，用简洁中文回答业务问题。"},
         {

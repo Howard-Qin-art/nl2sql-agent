@@ -108,8 +108,10 @@ class AgentResult:
 class NL2SQLAgent:
     def __init__(self, *, settings: Settings | None = None, llm: LLMClient | None = None,
                  docs: Sequence[TableDoc] | None = None, tracer: Tracer | None = None,
-                 use_llm_rerank: bool | None = None, use_clarify: bool = True, use_summary: bool = True):
+                 use_llm_rerank: bool | None = None, use_clarify: bool = True, use_summary: bool = True,
+                 lang: str = "zh"):
         self.s = settings or SETTINGS
+        self.lang = lang            # zh=中文电商口径；en=公开数据集（BIRD/Spider），不带业务口径
         self.tracer = tracer or Tracer(enabled=self.s.trace_enabled)
         self.llm = llm or LLMClient(settings=self.s, tracer=self.tracer)
         self.docs = list(docs) if docs is not None else introspect(self.s.db_path)
@@ -185,7 +187,7 @@ class NL2SQLAgent:
                 }
             try:
                 data, _ = self.llm.chat_json(
-                    build_clarify_messages(question, state.get("schema_text", "")),
+                    build_clarify_messages(question, state.get("schema_text", ""), lang=self.lang),
                     temperature=0.0, max_tokens=200,
                 )
             except LLMError as exc:
@@ -223,7 +225,7 @@ class NL2SQLAgent:
         temperature = self.s.sample_temperature if temperature is None else temperature
         messages = build_generation_messages(question, state.get("schema_text", ""),
                                             history=state.get("history"), retry_hint=retry_hint,
-                                            memory_text=state.get("memory_text"))
+                                            memory_text=state.get("memory_text"), lang=self.lang)
         plans: list[dict] = []
         with self.tracer.span("generate", n=n, temperature=temperature) as sp:
             for i in range(n):
@@ -284,7 +286,7 @@ class NL2SQLAgent:
         with self.tracer.span("repair", round=round_no, error=str(pick.get("reason"))[:160]) as sp:
             messages = build_repair_messages(state.get("question", ""), state.get("schema_text", ""),
                                              pick.get("sql", ""), str(pick.get("reason", "")),
-                                             history=state.get("history"))
+                                             history=state.get("history"), lang=self.lang)
             try:
                 data, _ = self.llm.chat_json(messages, model_cls=SQLPlan, temperature=0.2,
                                              max_tokens=self.s.max_tokens, seed=2000 + round_no)
@@ -332,7 +334,7 @@ class NL2SQLAgent:
             with self.tracer.span("synthesize") as sp:
                 try:
                     res = self.llm.chat(build_answer_messages(state.get("question", ""), state.get("chosen_sql", ""),
-                                                              columns, rows, row_count=row_count),
+                                                              columns, rows, row_count=row_count, lang=self.lang),
                                         temperature=0.2, max_tokens=200)
                     answer = (res.text or "").strip()
                     sp.outputs["answer"] = answer[:120]

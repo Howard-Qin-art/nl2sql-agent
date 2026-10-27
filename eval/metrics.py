@@ -164,11 +164,16 @@ def sql_normalized(sql: str) -> str:
 
 
 def percentile(values: Sequence[float], p: float) -> float:
+    """p 支持两种写法：0.95（分位）或 95（百分数），内部统一成分位。"""
     if not values:
         return 0.0
+    if p > 1:          # 传了百分数，比如 95 -> 0.95
+        p = p / 100.0
+    p = min(max(p, 0.0), 1.0)
     ordered = sorted(values)
     k = (len(ordered) - 1) * p
-    lo, hi = int(k), min(int(k) + 1, len(ordered) - 1)
+    lo = int(k)
+    hi = min(lo + 1, len(ordered) - 1)
     return ordered[lo] + (ordered[hi] - ordered[lo]) * (k - lo)
 
 
