@@ -76,7 +76,12 @@ def main() -> int:
 
     settings = SETTINGS
     if args.model:
-        settings = dataclasses.replace(settings, model=args.model)
+        # 注意：model 是本地 Ollama 的模型名，云端走的是 openai_model。
+        # 之前只改了 model，导致 --model glm-5.2 实际仍在调 .env 里的 qwen3.5-plus（慢 20 倍）。
+        if getattr(settings, "llm_backend", "") == "openai":
+            settings = dataclasses.replace(settings, openai_model=args.model)
+        else:
+            settings = dataclasses.replace(settings, model=args.model)
     settings = dataclasses.replace(settings, default_limit=10_000_000)   # 评测不截断结果
 
     tracer = Tracer(enabled=False)
@@ -107,7 +112,10 @@ def main() -> int:
                 pred_sql, pred_rows, err = "", [], f"{type(exc).__name__}: {exc}"
             latency_ms = (time.perf_counter() - t0) * 1000
             g_rows = gold_rows(db_file, it["sql_gold"])
-            ex = results_equal(g_rows, pred_rows, tolerant=True)
+            # 空对空不能算对：必须真的生成并执行了 SQL（之前这里把"没产出 SQL"也算正确，虚高成绩）
+            valid_pred = bool(pred_sql.strip()) and not err
+            both_empty = (not g_rows) and (not pred_rows)
+            ex = results_equal(g_rows, pred_rows, tolerant=True) if valid_pred else False
             rec = {
                 "question_id": it.get("question_id"),
                 "db_id": db_id,
@@ -116,6 +124,8 @@ def main() -> int:
                 "pred_sql": pred_sql,
                 "gold_rows": len(g_rows),
                 "pred_rows": len(pred_rows),
+                "valid_pred": valid_pred,
+                "both_empty": both_empty,
                 "ex": bool(ex),
                 "ex_loose": bool(results_equal_loose(g_rows, pred_rows)),
                 "latency_ms": round(latency_ms, 1),
@@ -137,7 +147,8 @@ def main() -> int:
         "latency_p50_s": round(percentile([r["latency_ms"] for r in records], 0.5) / 1000, 1),
         "latency_p95_s": round(percentile([r["latency_ms"] for r in records], 0.95) / 1000, 1),
         "elapsed_min": round((time.perf_counter() - t_start) / 60, 1),
-        "model": settings.model,
+        # 云端时真实模型在 openai_model 上（之前一律写 settings.model，导致汇总里显示成本地模型名）
+        "model": settings.openai_model if getattr(settings, "llm_backend", "") == "openai" else settings.model,
     }
     (OUT_DIR / f"{args.tag}-{stamp}_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")

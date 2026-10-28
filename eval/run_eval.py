@@ -194,6 +194,9 @@ def main() -> int:
                 record["correct"] = bool(pred_sql) and results_equal(gold_rows, pred_rows)
                 record["correct_strict"] = bool(pred_sql) and results_equal(gold_rows, pred_rows, tolerant=False)
                 record["correct_relaxed"] = bool(pred_sql) and results_equal(gold_rows, pred_rows, relaxed=True)
+                # metrics.summarize 读的是 correct_loose（列数宽松口径），之前没写这个字段，
+                # 导致 summary 里 ex_loose 一直是 0.0
+                record["correct_loose"] = bool(pred_sql) and results_equal_loose(gold_rows, pred_rows)
                 record["em"] = bool(pred_sql) and sql_normalized(gold_sql) == sql_normalized(pred_sql)
             elif expect == "clarify":
                 record["gradable"] = False

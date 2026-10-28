@@ -103,7 +103,15 @@ def main() -> int:
     summary["source_file"] = path.name
     summary["regraded"] = True
     summary["regrade_changed_verdicts"] = changed
-    summary["model"] = summary.get("model") or "qwen2.5:7b"
+    # 模型名从原始 summary 继承（原来硬编码成本地模型名，云端复评会被写错）
+    base_model = None
+    sibling = path.with_name(path.stem + "_summary.json")
+    if sibling.exists():
+        try:
+            base_model = json.loads(sibling.read_text(encoding="utf-8")).get("model")
+        except (json.JSONDecodeError, OSError):
+            base_model = None
+    summary["model"] = summary.get("model") or base_model or "unknown"
 
     base = results_dir / f"{args.tag}-{path.stem}"
     out_jsonl = base.with_suffix(".jsonl")

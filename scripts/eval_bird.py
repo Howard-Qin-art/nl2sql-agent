@@ -98,7 +98,11 @@ def main() -> int:
 
     settings = SETTINGS
     if args.model:
-        settings = dataclasses.replace(settings, model=args.model)
+        # 云端后端的模型名在 openai_model 上，本地在 model 上
+        if getattr(settings, "llm_backend", "") == "openai":
+            settings = dataclasses.replace(settings, openai_model=args.model)
+        else:
+            settings = dataclasses.replace(settings, model=args.model)
     # 评测口径：关掉「自动补 LIMIT」。
     # 产品里明细查询自动 LIMIT 100 是对的（防止刷屏），但 BIRD 的 gold SQL 会返回几千行，
     # 补 LIMIT 会把正确答案截断，导致执行准确率被低估。这里把上限放大，让结果集完整。
@@ -151,9 +155,11 @@ def main() -> int:
             except Exception as exc:  # noqa: BLE001
                 g_rows, g_err = [], str(exc)
 
-            ex = results_equal(g_rows, pred_rows, tolerant=True) if g_err is None else False
-            ex_relaxed = results_equal(g_rows, pred_rows, relaxed=True, tolerant=True) if g_err is None else False
-            ex_loose = results_equal_loose(g_rows, pred_rows) if g_err is None else False
+            # 空对空不算对：必须真的生成并执行了 SQL
+            valid_pred = bool(pred_sql.strip()) and not err and g_err is None
+            ex = results_equal(g_rows, pred_rows, tolerant=True) if valid_pred else False
+            ex_relaxed = results_equal(g_rows, pred_rows, relaxed=True, tolerant=True) if valid_pred else False
+            ex_loose = results_equal_loose(g_rows, pred_rows) if valid_pred else False
 
             rec = {
                 "question_id": q.get("question_id"),
