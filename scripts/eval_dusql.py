@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import random
 import sqlite3
 import sys
 import time
@@ -48,6 +49,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--per-db", type=int, default=0, help="每个库取 N 题（分层抽样）")
+    ap.add_argument("--shuffle", action="store_true", help="先随机打乱再取前 N 题（推荐，duSQL 的题按模板排序）")
+    ap.add_argument("--seed", type=int, default=42, help="打乱用的随机种子，保证可复现")
     ap.add_argument("--tag", default="dusql")
     ap.add_argument("--model", default=None)
     args = ap.parse_args()
@@ -62,8 +65,14 @@ def main() -> int:
                 picked.append(it)
                 seen[it["db_id"]] = n + 1
         items = picked
+    # DuSQL 的 dev.json 是按查询模板排序的（前 20 题几乎全是「没有…」这种反连接），
+    # 直接取前 N 题会得到虚高的准确率，所以默认先打乱。
+    if args.shuffle or args.per_db:
+        rng = random.Random(args.seed)
+        rng.shuffle(items)
     items = items[: args.limit] if not args.per_db else items
-    print(f"DuSQL 可执行题 {len(items)} 道 | {len({i['db_id'] for i in items})} 个库")
+    print(f"DuSQL 可执行题 {len(items)} 道 | {len({i['db_id'] for i in items})} 个库"
+          + (f" | 已打乱 seed={args.seed}" if (args.shuffle or args.per_db) else " | 未打乱（按文件顺序）"))
 
     settings = SETTINGS
     if args.model:
